@@ -1,0 +1,18 @@
+services:
+  gateway:
+    image: ghcr.io/phioranex/openclaw-docker:latest
+    container_name: openclaw{{N}}-gateway
+    restart: unless-stopped
+
+    # OpenClaw inside container listens on 8789 (HTTP) and 8790 (WS)
+    ports:
+      - "{{API_PORT}}:8789"
+      - "{{WS_PORT}}:8790"
+
+    environment:
+      # Optional: set timezone or any other env you want
+      - TZ={{TZ}}
+
+    volumes:
+      # Instance data isolation
+      - "{{DATA_DIR}}:/root/.openclaw"
