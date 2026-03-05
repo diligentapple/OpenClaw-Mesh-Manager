@@ -37,7 +37,7 @@ openclaw-new N
 
 Example: `openclaw-new 3` creates instance #3.
 
-To force pulling the latest image before creating:
+**To force pulling the latest OpenClaw image before creating:**
 
 ```bash
 openclaw-new --pull N
@@ -60,6 +60,7 @@ docker logs -f openclawN-gateway
 ```
 
 ### Update an instance (pull latest image and recreate)
+Note: Data is preserved, but may cause compatibility issues -> updating using this method not recommanded
 
 ```bash
 openclaw-update N
