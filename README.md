@@ -82,6 +82,13 @@ Each instance N gets deterministic ports:
 | `~/openclawN/`    | Compose file for instance N      |
 | `~/.openclawN/`   | Persistent data for instance N   |
 
+## Notes
+
+- 1 instance = 1 container
+- Instances don't interfere with each other
+- Safe to run many on one VPS
+- Creating an instance with a number that already exists is blocked -- you must delete first
+
 ## Firewall / Reverse Proxy
 
 Ports are bound to `0.0.0.0` by default. For production, consider:
