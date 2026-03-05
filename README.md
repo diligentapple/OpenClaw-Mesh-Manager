@@ -34,14 +34,21 @@ openclaw-new N
 
 Example: `openclaw-new 3` creates instance #3.
 
-### Onboard / health check / logs
+### Onboarding (required after creating)
+
+```bash
+cd ~/openclawN
+docker compose --profile cli run --rm openclaw-cli onboard
+```
+
+### Health check / logs
 
 ```bash
 # Health check
-curl http://127.0.0.1:38789/health
+curl http://127.0.0.1:N8789/health
 
 # Logs
-docker logs -f openclaw3-gateway
+docker logs -f openclawN-gateway
 ```
 
 ### Update an instance (pull latest image and recreate)
