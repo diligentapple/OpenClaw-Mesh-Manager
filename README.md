@@ -37,8 +37,7 @@ Example: `openclaw-new 3` creates instance #3.
 ### Onboarding (required after creating)
 
 ```bash
-cd ~/openclawN
-docker compose --profile cli run --rm openclaw-cli onboard
+openclaw-onboard N
 ```
 
 ### Health check / logs
