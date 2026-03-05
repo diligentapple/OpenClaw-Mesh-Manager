@@ -1,14 +1,15 @@
 # OpenClaw Multi-Instance Manager
 
-Manage multiple [OpenClaw](https://github.com/phioranex/openclaw-docker) Docker instances on a single machine with deterministic naming, ports, and data directories.
+Manage multiple [OpenClaw](https://github.com/openclaw/openclaw) Docker instances on a single machine with deterministic naming, ports, and data directories.
 
-This tool wraps the official OpenClaw Docker image (`ghcr.io/phioranex/openclaw-docker:latest`) to make it easy to run multiple isolated instances on a single VPS.
+This tool wraps a community OpenClaw Docker image (`ghcr.io/phioranex/openclaw-docker:latest`) to make it easy to run multiple isolated instances on a single VPS.
 
 ## Prerequisites
 
 - Docker Engine (20.10+)
 - Docker Compose plugin (`docker compose`) or legacy `docker-compose`
 - `curl` (for one-liner install)
+Docker will be auto installed in this script (if not present on the machine).
 
 ## Install
 
