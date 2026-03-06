@@ -6,6 +6,7 @@ This tool wraps the official OpenClaw Docker image (`ghcr.io/phioranex/openclaw-
 
 ## Prerequisites
 
+- **Linux** (this tool is Linux-only; on Windows use WSL2, on macOS use a Linux VM)
 - Docker Engine (20.10+)
 - Docker Compose plugin (`docker compose`) or legacy `docker-compose`
 - `curl` (for one-liner install)
