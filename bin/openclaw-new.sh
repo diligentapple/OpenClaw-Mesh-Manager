@@ -83,7 +83,9 @@ if port_in_use "$API_PORT" || port_in_use "$WS_PORT"; then
   exit 1
 fi
 
-mkdir -p "$INSTANCE_DIR" "$DATA_DIR"
+mkdir -p "$INSTANCE_DIR" "$DATA_DIR/workspace"
+# Container runs as uid 1000 (node). Fix ownership so the process can write.
+chown -R 1000:1000 "$DATA_DIR"
 
 if [[ ! -f "$TEMPLATE" ]]; then
   echo "Template not found: $TEMPLATE"

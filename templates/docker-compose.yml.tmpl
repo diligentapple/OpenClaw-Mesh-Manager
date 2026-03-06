@@ -15,6 +15,5 @@ services:
       - TZ={{TZ}}
 
     volumes:
-      # Instance data isolation
+      # Instance data isolation – workspace/ is a subdirectory, no extra mount needed
       - "{{DATA_DIR}}:/home/node/.openclaw"
-      - "{{DATA_DIR}}/workspace:/home/node/.openclaw/workspace"
