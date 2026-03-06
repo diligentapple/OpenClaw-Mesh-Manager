@@ -59,7 +59,7 @@ openclaw-new --pull N
 openclaw-onboard N
 ```
 
-### Activate Telegram bot
+### Step 3: Activate Telegram bot
 
 After onboarding with a Telegram channel, send a message to your bot on Telegram. You will see a pairing request in the container logs:
 
@@ -79,7 +79,27 @@ openclaw1 pairing approve telegram XXXXXX
 
 Replace `1` with your instance number and `XXXXXX` with the actual pairing code shown in the logs.
 
-### Health check / logs
+## Run commands inside an instance
+
+When you create an instance, a shortcut `openclawN` is automatically created. Use it to run commands inside the container without needing `docker exec`:
+
+```bash
+# Directly run a single command
+openclaw1 node --version
+openclaw2 cat /app/config.json
+openclawN pairing approve telegram XXXXXX
+
+# Open an interactive shell in instance 1
+openclaw1
+```
+
+The longer form also works:
+
+```bash
+openclaw-exec 1 node --version
+```
+
+## Health check / logs
 
 ```bash
 # Health check
@@ -87,25 +107,6 @@ curl http://127.0.0.1:N8789/health
 
 # Logs
 docker logs -f openclawN-gateway
-```
-
-### Run commands inside an instance
-
-When you create an instance, a shortcut `openclawN` is automatically created. Use it to run commands inside the container without needing `docker exec`:
-
-```bash
-# Open an interactive shell in instance 1
-openclaw1
-
-# Run a single command
-openclaw1 node --version
-openclaw2 cat /app/config.json
-```
-
-The longer form also works:
-
-```bash
-openclaw-exec 1 node --version
 ```
 
 ### Update an instance (pull latest image and recreate)
