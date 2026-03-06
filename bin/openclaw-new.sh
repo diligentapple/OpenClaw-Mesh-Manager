@@ -34,7 +34,7 @@ render_template() {
     -e "s/{{API_PORT}}/${API_PORT}/g" \
     -e "s/{{WS_PORT}}/${WS_PORT}/g" \
     -e "s#{{DATA_DIR}}#${DATA_DIR}#g" \
-    -e "s/{{TZ}}/${TZ}/g" \
+    -e "s#{{TZ}}#${TZ}#g" \
     "$tmpl" > "$out"
 }
 

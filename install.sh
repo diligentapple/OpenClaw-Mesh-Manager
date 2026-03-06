@@ -28,6 +28,12 @@ else
   echo "Docker already installed: $(docker --version)"
 fi
 
+# Add the invoking user to the docker group so they can run docker without sudo
+if [[ -n "${SUDO_USER:-}" ]] && ! id -nG "$SUDO_USER" 2>/dev/null | grep -qw docker; then
+  usermod -aG docker "$SUDO_USER" 2>/dev/null || true
+  echo "Added $SUDO_USER to the docker group. Log out and back in (or run 'newgrp docker') for this to take effect."
+fi
+
 mkdir -p "$BIN_DIR" "$SHARE_DIR/templates"
 
 install -m 0755 "${REPO_DIR}/bin/openclaw-new.sh"    "${BIN_DIR}/openclaw-new"
