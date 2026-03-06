@@ -59,7 +59,26 @@ openclaw-new --pull N
 openclaw-onboard N
 ```
 
-## Useful Commands
+### Activate Telegram bot
+
+After onboarding with a Telegram channel, send a message to your bot on Telegram. You will see a pairing request in the container logs:
+
+```
+OpenClaw: access not configured.
+Your Telegram user id: XXXXXXXXXX
+Pairing code: XXXXXX
+Ask the bot owner to approve with:
+  openclaw pairing approve telegram XXXXXX
+```
+
+Approve the pairing from your host machine using the instance shortcut:
+
+```bash
+openclaw1 pairing approve telegram XXXXXX
+```
+
+Replace `1` with your instance number and `XXXXXX` with the actual pairing code shown in the logs.
+
 ### Health check / logs
 
 ```bash
