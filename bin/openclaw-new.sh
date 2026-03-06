@@ -128,6 +128,13 @@ fi
 echo "Bringing up instance #$N..."
 $COMPOSE_BIN -f "${INSTANCE_DIR}/docker-compose.yml" up -d
 
+# Create shortcut symlink: openclawN -> openclaw-exec
+EXEC_BIN="$(command -v openclaw-exec 2>/dev/null || echo "/usr/local/bin/openclaw-exec")"
+SHORTCUT="/usr/local/bin/openclaw${N}"
+if [[ ! -e "$SHORTCUT" ]] && [[ -x "$EXEC_BIN" ]]; then
+  ln -s "$EXEC_BIN" "$SHORTCUT" 2>/dev/null || true
+fi
+
 echo ""
 echo "Created OpenClaw instance #$N"
 echo "Container : $CONTAINER"
@@ -138,6 +145,10 @@ echo "WS Port   : $WS_PORT"
 echo ""
 echo "Next: run onboarding"
 echo "  openclaw-onboard $N"
+echo ""
+echo "Shortcut:"
+echo "  openclaw${N} <command>          (runs command inside the container)"
+echo "  openclaw${N}                    (opens interactive shell)"
 echo ""
 echo "Health:"
 echo "  curl http://127.0.0.1:${API_PORT}/health"

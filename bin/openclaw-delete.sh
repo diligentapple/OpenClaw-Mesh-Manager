@@ -53,4 +53,10 @@ if [[ -d "$DATA_DIR" ]]; then
 fi
 rm -rf "${DATA_DIR}" "${INSTANCE_DIR}"
 
+# Remove shortcut symlink if it exists
+SHORTCUT="/usr/local/bin/openclaw${N}"
+if [[ -L "$SHORTCUT" ]]; then
+  rm -f "$SHORTCUT"
+fi
+
 echo "Deleted instance #$N"

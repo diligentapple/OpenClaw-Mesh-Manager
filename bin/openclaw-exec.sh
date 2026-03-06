@@ -13,15 +13,21 @@ usage() {
   echo "  openclaw-exec 3 cat /app/config.json"
 }
 
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  usage; exit 0
-fi
+# Support being called as "openclawN" symlink (extract N from command name)
+SELF="$(basename "$0")"
+if [[ "$SELF" =~ ^openclaw([0-9]+)$ ]]; then
+  N="${BASH_REMATCH[1]}"
+else
+  if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    usage; exit 0
+  fi
 
-N="${1:-}"
-if [[ -z "$N" ]] || ! [[ "$N" =~ ^[0-9]+$ ]] || [[ "$N" -lt 1 ]]; then
-  usage; exit 1
+  N="${1:-}"
+  if [[ -z "$N" ]] || ! [[ "$N" =~ ^[0-9]+$ ]] || [[ "$N" -lt 1 ]]; then
+    usage; exit 1
+  fi
+  shift
 fi
-shift
 
 CONTAINER="openclaw${N}-gateway"
 
