@@ -17,5 +17,4 @@ fi
 echo "Running onboarding for instance #$N..."
 docker run -it --rm \
   -v "${DATA_DIR}:/home/node/.openclaw" \
-  -v "${DATA_DIR}/workspace:/home/node/.openclaw/workspace" \
   ghcr.io/phioranex/openclaw-docker:latest onboard
