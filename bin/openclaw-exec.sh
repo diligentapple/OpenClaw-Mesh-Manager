@@ -8,9 +8,9 @@ usage() {
   echo "Run a command inside OpenClaw instance N's container."
   echo ""
   echo "Examples:"
-  echo "  openclaw-exec 1                       (interactive shell)"
-  echo "  openclaw-exec 2 node --version"
-  echo "  openclaw-exec 3 cat /app/config.json"
+  echo "  openclaw-exec 1                                       (interactive shell)"
+  echo "  openclaw-exec 1 pairing approve telegram ABC123       (openclaw subcommand)"
+  echo "  openclaw-exec 2 node --version                        (system binary)"
 }
 
 # Support being called as "openclawN" symlink (extract N from command name)
@@ -40,5 +40,13 @@ fi
 if [[ $# -eq 0 ]]; then
   exec docker exec -it "$CONTAINER" bash
 else
-  exec docker exec "$CONTAINER" "$@"
+  # If the first argument is a system binary (bash, node, cat, …)
+  # run it directly.  Otherwise treat it as an OpenClaw CLI subcommand
+  # and route through the app entrypoint so commands like "pairing",
+  # "gateway", "config" etc. work correctly.
+  if docker exec "$CONTAINER" which "$1" >/dev/null 2>&1; then
+    exec docker exec "$CONTAINER" "$@"
+  else
+    exec docker exec "$CONTAINER" node /app/dist/index.js "$@"
+  fi
 fi
