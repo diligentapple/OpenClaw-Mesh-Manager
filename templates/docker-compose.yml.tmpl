@@ -3,6 +3,7 @@ services:
     image: ghcr.io/phioranex/openclaw-docker:latest
     container_name: openclaw{{N}}-gateway
     restart: unless-stopped
+    command: gateway start --foreground
 
     # OpenClaw inside container listens on 8789 (HTTP) and 8790 (WS)
     ports:
@@ -15,4 +16,5 @@ services:
 
     volumes:
       # Instance data isolation
-      - "{{DATA_DIR}}:/root/.openclaw"
+      - "{{DATA_DIR}}:/home/node/.openclaw"
+      - "{{DATA_DIR}}/workspace:/home/node/.openclaw/workspace"
