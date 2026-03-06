@@ -2,9 +2,10 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: openclaw-new [--pull] N"
-  echo "Example: openclaw-new 3"
-  echo "         openclaw-new --pull 3  (pull latest image first)"
+  echo "Usage: openclaw-new [--pull] [--port API_PORT] N"
+  echo "Example: openclaw-new 3                          (auto ports: 38789/38790)"
+  echo "         openclaw-new --pull 3                   (pull latest image first)"
+  echo "         openclaw-new --port 9000 7              (custom ports: 9000/9001)"
 }
 
 need_cmd() {
@@ -39,16 +40,17 @@ render_template() {
 }
 
 PULL=false
+CUSTOM_PORT=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --pull) PULL=true; shift ;;
+    --port) CUSTOM_PORT="${2:-}"; shift 2 ;;
     *)      break ;;
   esac
 done
 
 N="${1:-}"
-if ! is_int "$N" || [[ "$N" -lt 1 || "$N" -gt 6 ]]; then
-  echo "Error: N must be an integer between 1 and 6 (port ${N:-?}8789 would exceed 65535)."
+if ! is_int "$N" || [[ "$N" -lt 1 ]]; then
   usage; exit 1
 fi
 
@@ -65,10 +67,29 @@ fi
 HOME_DIR="${HOME:-/root}"
 INSTANCE_DIR="${HOME_DIR}/openclaw${N}"
 DATA_DIR="${HOME_DIR}/.openclaw${N}"
-API_PORT="${N}8789"
-WS_PORT="${N}8790"
 CONTAINER="openclaw${N}-gateway"
 TZ="${TZ:-Asia/Tokyo}"
+
+# Instances 1-6 get automatic ports; 7+ require --port
+if [[ -n "$CUSTOM_PORT" ]]; then
+  if ! is_int "$CUSTOM_PORT" || [[ "$CUSTOM_PORT" -lt 1024 || "$CUSTOM_PORT" -gt 65534 ]]; then
+    echo "Error: port must be between 1024 and 65534."
+    exit 1
+  fi
+  API_PORT="$CUSTOM_PORT"
+  WS_PORT="$((CUSTOM_PORT + 1))"
+elif [[ "$N" -le 6 ]]; then
+  API_PORT="${N}8789"
+  WS_PORT="${N}8790"
+else
+  read -r -p "Instance #$N needs custom ports. Enter API port (WS will be port+1): " CUSTOM_PORT
+  if ! is_int "$CUSTOM_PORT" || [[ "$CUSTOM_PORT" -lt 1024 || "$CUSTOM_PORT" -gt 65534 ]]; then
+    echo "Error: port must be between 1024 and 65534."
+    exit 1
+  fi
+  API_PORT="$CUSTOM_PORT"
+  WS_PORT="$((CUSTOM_PORT + 1))"
+fi
 
 TEMPLATE="${OPENCLAW_MGR_TEMPLATE:-/usr/local/share/openclaw-manager/templates/docker-compose.yml.tmpl}"
 
