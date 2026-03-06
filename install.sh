@@ -41,6 +41,7 @@ install -m 0755 "${REPO_DIR}/bin/openclaw-delete.sh" "${BIN_DIR}/openclaw-delete
 install -m 0755 "${REPO_DIR}/bin/openclaw-update.sh" "${BIN_DIR}/openclaw-update"
 install -m 0755 "${REPO_DIR}/bin/openclaw-list.sh"   "${BIN_DIR}/openclaw-list"
 install -m 0755 "${REPO_DIR}/bin/openclaw-onboard.sh" "${BIN_DIR}/openclaw-onboard"
+install -m 0755 "${REPO_DIR}/bin/openclaw-exec.sh"    "${BIN_DIR}/openclaw-exec"
 
 install -m 0644 "${REPO_DIR}/templates/docker-compose.yml.tmpl" "${SHARE_DIR}/templates/docker-compose.yml.tmpl"
 
@@ -56,4 +57,5 @@ echo "  openclaw-new N"
 echo "  openclaw-delete N"
 echo "  openclaw-onboard N"
 echo "  openclaw-update N"
+echo "  openclaw-exec N [cmd...]"
 echo "  openclaw-list"

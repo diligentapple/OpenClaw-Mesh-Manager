@@ -70,6 +70,25 @@ curl http://127.0.0.1:N8789/health
 docker logs -f openclawN-gateway
 ```
 
+### Run commands inside an instance
+
+When you create an instance, a shortcut `openclawN` is automatically created. Use it to run commands inside the container without needing `docker exec`:
+
+```bash
+# Open an interactive shell in instance 1
+openclaw1
+
+# Run a single command
+openclaw1 node --version
+openclaw2 cat /app/config.json
+```
+
+The longer form also works:
+
+```bash
+openclaw-exec 1 node --version
+```
+
 ### Update an instance (pull latest image and recreate)
 Note: Data is preserved, but may cause compatibility issues -> updating using this method not recommanded
 
