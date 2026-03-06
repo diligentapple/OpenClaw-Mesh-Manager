@@ -44,7 +44,7 @@ fi
 # Data dir may contain files owned by UID 1000 (container's node user).
 # Use a disposable container to clean up files we can't remove as host user.
 if [[ -d "$DATA_DIR" ]]; then
-  docker run --rm -v "${DATA_DIR}:/cleanup" busybox sh -c 'rm -rf /cleanup/*'
+  docker run --rm -v "${DATA_DIR}:/cleanup" ghcr.io/phioranex/openclaw-docker:latest sh -c 'rm -rf /cleanup/*'
 fi
 rm -rf "${DATA_DIR}" "${INSTANCE_DIR}"
 
