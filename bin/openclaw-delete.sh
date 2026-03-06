@@ -16,6 +16,11 @@ INSTANCE_DIR="${HOME_DIR}/openclaw${N}"
 DATA_DIR="${HOME_DIR}/.openclaw${N}"
 CONTAINER="openclaw${N}-gateway"
 
+if [[ ! -d "$INSTANCE_DIR" && ! -d "$DATA_DIR" ]]; then
+  echo "Instance #$N does not exist."
+  exit 1
+fi
+
 COMPOSE_BIN="docker compose"
 if ! docker compose version >/dev/null 2>&1; then
   COMPOSE_BIN="docker-compose"
