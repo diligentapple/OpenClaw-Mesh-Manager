@@ -86,8 +86,8 @@ fi
 mkdir -p "$INSTANCE_DIR" "$DATA_DIR"
 # Container runs as uid 1000 (node). Create workspace with correct ownership
 # without requiring sudo on the host.
-docker run --rm -v "${DATA_DIR}:/setup" ghcr.io/phioranex/openclaw-docker:latest \
-  sh -c 'mkdir -p /setup/workspace && chown -R 1000:1000 /setup'
+docker run --rm --entrypoint sh -v "${DATA_DIR}:/setup" ghcr.io/phioranex/openclaw-docker:latest \
+  -c 'mkdir -p /setup/workspace && chown -R 1000:1000 /setup'
 
 if [[ ! -f "$TEMPLATE" ]]; then
   echo "Template not found: $TEMPLATE"
