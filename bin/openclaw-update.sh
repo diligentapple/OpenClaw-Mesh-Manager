@@ -17,6 +17,6 @@ fi
 
 [[ -f "$COMPOSE_FILE" ]] || { echo "Missing: $COMPOSE_FILE"; exit 1; }
 
-docker pull ghcr.io/phioranex/openclaw-docker:latest
+docker pull --progress=plain ghcr.io/phioranex/openclaw-docker:latest
 $COMPOSE_BIN -f "$COMPOSE_FILE" up -d --force-recreate
 echo "Updated instance #$N"

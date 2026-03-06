@@ -94,7 +94,7 @@ render_template "$TEMPLATE" "${INSTANCE_DIR}/docker-compose.yml"
 
 if [[ "$PULL" == true ]]; then
   echo "Pulling latest OpenClaw image..."
-  docker pull ghcr.io/phioranex/openclaw-docker:latest
+  docker pull --progress=plain ghcr.io/phioranex/openclaw-docker:latest
 fi
 
 echo "Bringing up instance #$N..."
