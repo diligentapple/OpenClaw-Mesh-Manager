@@ -195,9 +195,9 @@ for (( i=RANGE_START; i<=RANGE_END; i++ )); do
   fi
 
   if create_instance "$i"; then
-    ((CREATED++))
+    ((CREATED++)) || true
   else
-    ((FAILED++))
+    ((FAILED++)) || true
   fi
   echo ""
 done
