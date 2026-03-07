@@ -697,7 +697,7 @@ print_summary() {
     echo "Open the Fallback URL from any device on your tailnet."
     echo ""
   fi
-  echo "If the browser shows \"pairing required\", run:"
+  echo "If a new device needs pairing later, run:"
   echo "  openclaw-remote $N --approve"
   echo ""
   echo "To check status:  openclaw-remote $N --status"
@@ -726,6 +726,11 @@ do_enable() {
   fi
 
   restart_and_wait
+
+  # Auto-approve any pending device pairing requests so the dashboard
+  # is immediately usable without a separate --approve step.
+  AUTO_YES=true approve_devices
+
   print_summary
 }
 
