@@ -153,6 +153,9 @@ check_prerequisites() {
     exit 1
   fi
 
+  # Approve only needs Docker + running container, not Tailscale
+  if [[ "$ACTION" == "approve" ]]; then return 0; fi
+
   if ! command -v tailscale >/dev/null 2>&1; then
     echo "Error: Tailscale is not installed."
     echo "  Install it: https://tailscale.com/download/linux"
@@ -503,54 +506,36 @@ restart_and_wait() {
 # ---------------------------------------------------------------------------
 
 approve_devices() {
-  find_device_files
+  # Use the OpenClaw CLI inside the container to list and approve pending
+  # devices.  Direct file manipulation does not work -- the gateway manages
+  # its own internal state and ignores external edits to paired/pending JSON.
 
-  if [[ -z "$PENDING_FILE" ]]; then
-    echo "No pending devices file found."
-    echo "  Searched: ${DATA_DIR}/nodes/, ${DATA_DIR}/devices/, ${DATA_DIR}/"
-    echo "  The device may not have sent a pairing request yet, or OpenClaw"
-    echo "  stores pairing data in an unexpected location."
+  # Step 1: Get pending request IDs via the CLI
+  local cli_output
+  cli_output=$(docker exec "$CONTAINER" node /app/dist/index.js devices list 2>&1) || true
+
+  # Extract request IDs from the "Pending" section of CLI output.
+  # The table has columns: Request | Device | Role | IP | Age | Flags
+  # Request IDs are UUIDs (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).
+  local request_ids
+  request_ids=$(echo "$cli_output" | \
+    grep -oP '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | \
+    sort -u) || true
+
+  if [[ -z "$request_ids" ]]; then
+    echo "No pending device pairing requests."
     echo ""
-    echo "  Try checking inside the container:"
-    echo "    docker exec ${CONTAINER} find /home/node/.openclaw -name pending.json"
+    echo "  Checked via: docker exec $CONTAINER node /app/dist/index.js devices list"
     return 0
   fi
-
-  if [[ ! -f "$PENDING_FILE" ]]; then
-    echo "No pending devices file found at: $PENDING_FILE"
-    return 0
-  fi
-
-  # Detect whether pending.json is an array or object
-  local pending_type
-  pending_type=$(sudo jq -r 'type' "$PENDING_FILE" 2>/dev/null || echo "unknown")
 
   local pending_count
-  if [[ "$pending_type" == "array" ]]; then
-    pending_count=$(sudo jq 'length' "$PENDING_FILE" 2>/dev/null || echo "0")
-  elif [[ "$pending_type" == "object" ]]; then
-    pending_count=$(sudo jq 'keys | length' "$PENDING_FILE" 2>/dev/null || echo "0")
-  else
-    echo "Error: Unexpected pending.json format ($pending_type)."
-    echo "  File: $PENDING_FILE"
-    return 1
-  fi
-
-  if [[ "$pending_count" == "0" || "$pending_count" == "null" ]]; then
-    echo "No pending device pairing requests."
-    echo "  Checked: $PENDING_FILE"
-    return 0
-  fi
+  pending_count=$(echo "$request_ids" | wc -l)
 
   echo "Pending device pairing requests ($pending_count):"
-  echo "  Source: $PENDING_FILE"
-  if [[ "$pending_type" == "array" ]]; then
-    sudo jq -r '.[] | "  - \(.name // .requestId // .id // "unknown") (\(.type // "unknown"))"' "$PENDING_FILE" 2>/dev/null || \
-      sudo jq '.' "$PENDING_FILE"
-  else
-    sudo jq -r 'to_entries[] | "  - \(.key) (\(.value.type // .value.channel // "unknown"))"' "$PENDING_FILE" 2>/dev/null || \
-      sudo jq '.' "$PENDING_FILE"
-  fi
+  echo "$request_ids" | while read -r rid; do
+    echo "  - $rid"
+  done
   echo ""
 
   if [[ "$AUTO_YES" != true ]]; then
@@ -561,81 +546,34 @@ approve_devices() {
     fi
   fi
 
-  local owner
-  owner=$(sudo stat -c '%u:%g' "$PENDING_FILE")
+  local approved=0 failed=0
+  while read -r rid; do
+    echo "Approving $rid ..."
+    if docker exec "$CONTAINER" node /app/dist/index.js devices approve "$rid" 2>&1; then
+      ((approved++))
+    else
+      echo "  Warning: 'devices approve' failed for $rid, trying 'pairing approve' ..."
+      if docker exec "$CONTAINER" node /app/dist/index.js pairing approve "$rid" 2>&1; then
+        ((approved++))
+      else
+        echo "  Error: Could not approve $rid"
+        ((failed++))
+      fi
+    fi
+  done <<< "$request_ids"
 
-  # Detect paired.json format (object or array) -- initialize if missing
-  local paired_type="object"
-  if [[ ! -f "$PAIRED_FILE" ]]; then
-    # Match the format of pending.json for consistency, default to object
-    echo '{}' | sudo tee "$PAIRED_FILE" >/dev/null
-    restore_ownership "$PAIRED_FILE" "$owner"
-  else
-    paired_type=$(sudo jq -r 'type' "$PAIRED_FILE" 2>/dev/null || echo "object")
-  fi
-
-  local paired_owner
-  paired_owner=$(sudo stat -c '%u:%g' "$PAIRED_FILE")
-
-  local ts
-  ts="$(date +%s)000"
-
-  local merged
-  merged=$(mktemp)
-
-  # Merge pending entries into paired, handling all format combinations:
-  #   paired=object + pending=array  (observed in the wild)
-  #   paired=object + pending=object
-  #   paired=array  + pending=array
-  #   paired=array  + pending=object
-  if [[ "$paired_type" == "object" && "$pending_type" == "array" ]]; then
-    # Convert pending array entries to object keyed by requestId/id, then merge
-    sudo jq -s --arg ts "$ts" '
-      .[0] as $paired | .[1] as $pending |
-      ($pending | map(
-        {(.requestId // .id // (. | tostring | .[0:8])): (. + {"approvedAt": ($ts | tonumber), "status": "approved"})}
-      ) | add // {}) as $new |
-      $paired * $new
-    ' "$PAIRED_FILE" "$PENDING_FILE" > "$merged"
-  elif [[ "$paired_type" == "object" && "$pending_type" == "object" ]]; then
-    sudo jq -s --arg ts "$ts" '
-      .[0] as $paired | .[1] as $pending |
-      ($pending | to_entries | map(
-        {(.key): (.value + {"approvedAt": ($ts | tonumber), "status": "approved"})}
-      ) | add // {}) as $new |
-      $paired * $new
-    ' "$PAIRED_FILE" "$PENDING_FILE" > "$merged"
-  elif [[ "$paired_type" == "array" && "$pending_type" == "array" ]]; then
-    sudo jq -s --arg ts "$ts" '
-      .[0] + [.[1][] | . + {"approvedAt": ($ts | tonumber), "status": "approved"}]
-    ' "$PAIRED_FILE" "$PENDING_FILE" > "$merged"
-  elif [[ "$paired_type" == "array" && "$pending_type" == "object" ]]; then
-    sudo jq -s --arg ts "$ts" '
-      .[0] + [.[1] | to_entries[] | .value + {"approvedAt": ($ts | tonumber), "status": "approved"}]
-    ' "$PAIRED_FILE" "$PENDING_FILE" > "$merged"
-  fi
-
-  if ! jq empty "$merged" 2>/dev/null; then
-    echo "Error: JSON validation failed. Pairing unchanged."
-    rm -f "$merged"
+  echo ""
+  if [[ "$failed" -gt 0 ]]; then
+    echo "Approved $approved device(s), $failed failed."
+    echo ""
+    echo "  You can try approving manually inside the container:"
+    echo "    docker exec -it $CONTAINER bash"
+    echo "    node /app/dist/index.js devices list"
+    echo "    node /app/dist/index.js devices approve <requestId>"
     return 1
-  fi
-
-  sudo mv "$merged" "$PAIRED_FILE"
-  restore_ownership "$PAIRED_FILE" "$paired_owner"
-
-  # Clear pending (preserve original format)
-  local empty_tmp
-  empty_tmp=$(mktemp)
-  if [[ "$pending_type" == "array" ]]; then
-    echo '[]' > "$empty_tmp"
   else
-    echo '{}' > "$empty_tmp"
+    echo "Approved $approved device(s)."
   fi
-  sudo mv "$empty_tmp" "$PENDING_FILE"
-  restore_ownership "$PENDING_FILE" "$owner"
-
-  echo "Approved $pending_count device(s)."
 
   # Restart to pick up changes
   restart_and_wait
@@ -686,33 +624,22 @@ print_status() {
   echo ""
 
   echo "Devices:"
-  find_device_files
-  local pending_count=0 paired_count=0
-  if [[ -n "$PENDING_FILE" && -f "$PENDING_FILE" ]]; then
-    local pt
-    pt=$(sudo jq -r 'type' "$PENDING_FILE" 2>/dev/null || echo "unknown")
-    if [[ "$pt" == "object" ]]; then
-      pending_count=$(sudo jq 'keys | length' "$PENDING_FILE" 2>/dev/null || echo "0")
-    else
-      pending_count=$(sudo jq 'length' "$PENDING_FILE" 2>/dev/null || echo "0")
-    fi
+  # Use the OpenClaw CLI for accurate device counts
+  local devices_output
+  devices_output=$(docker exec "$CONTAINER" node /app/dist/index.js devices list 2>&1) || true
+  local pending_count paired_count
+  # Count lines in the Pending and Paired table sections
+  pending_count=$(echo "$devices_output" | grep -cP '^│ [0-9a-f]{8}-' || echo "0")
+  paired_count=$(echo "$devices_output" | grep -cP '^│ [0-9a-f]{10,}' || echo "0")
+  # Fallback: parse the "Pending (N)" / "Paired (N)" headers
+  if [[ "$pending_count" == "0" ]]; then
+    pending_count=$(echo "$devices_output" | grep -oP 'Pending \(\K[0-9]+' || echo "0")
   fi
-  if [[ -n "$PAIRED_FILE" && -f "$PAIRED_FILE" ]]; then
-    local pt
-    pt=$(sudo jq -r 'type' "$PAIRED_FILE" 2>/dev/null || echo "unknown")
-    if [[ "$pt" == "object" ]]; then
-      paired_count=$(sudo jq 'keys | length' "$PAIRED_FILE" 2>/dev/null || echo "0")
-    else
-      paired_count=$(sudo jq 'length' "$PAIRED_FILE" 2>/dev/null || echo "0")
-    fi
+  if [[ "$paired_count" == "0" ]]; then
+    paired_count=$(echo "$devices_output" | grep -oP 'Paired \(\K[0-9]+' || echo "0")
   fi
   echo "  Paired                : $paired_count"
   echo "  Pending               : $pending_count"
-  if [[ -n "$DEVICES_DIR" ]]; then
-    echo "  Data dir              : $DEVICES_DIR"
-  else
-    echo "  Data dir              : (not found)"
-  fi
   echo ""
 
   echo "Firewall:"
