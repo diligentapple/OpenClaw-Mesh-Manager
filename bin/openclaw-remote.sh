@@ -521,8 +521,20 @@ approve_devices() {
     return 0
   fi
 
+  # Detect whether pending.json is an array or object
+  local pending_type
+  pending_type=$(sudo jq -r 'type' "$PENDING_FILE" 2>/dev/null || echo "unknown")
+
   local pending_count
-  pending_count=$(sudo jq 'length' "$PENDING_FILE" 2>/dev/null || echo "0")
+  if [[ "$pending_type" == "array" ]]; then
+    pending_count=$(sudo jq 'length' "$PENDING_FILE" 2>/dev/null || echo "0")
+  elif [[ "$pending_type" == "object" ]]; then
+    pending_count=$(sudo jq 'keys | length' "$PENDING_FILE" 2>/dev/null || echo "0")
+  else
+    echo "Error: Unexpected pending.json format ($pending_type)."
+    echo "  File: $PENDING_FILE"
+    return 1
+  fi
 
   if [[ "$pending_count" == "0" || "$pending_count" == "null" ]]; then
     echo "No pending device pairing requests."
@@ -532,8 +544,13 @@ approve_devices() {
 
   echo "Pending device pairing requests ($pending_count):"
   echo "  Source: $PENDING_FILE"
-  sudo jq -r '.[] | "  - \(.name // .id // "unknown") (\(.type // "unknown"))"' "$PENDING_FILE" 2>/dev/null || \
-    sudo jq '.' "$PENDING_FILE"
+  if [[ "$pending_type" == "array" ]]; then
+    sudo jq -r '.[] | "  - \(.name // .requestId // .id // "unknown") (\(.type // "unknown"))"' "$PENDING_FILE" 2>/dev/null || \
+      sudo jq '.' "$PENDING_FILE"
+  else
+    sudo jq -r 'to_entries[] | "  - \(.key) (\(.value.type // .value.channel // "unknown"))"' "$PENDING_FILE" 2>/dev/null || \
+      sudo jq '.' "$PENDING_FILE"
+  fi
   echo ""
 
   if [[ "$AUTO_YES" != true ]]; then
@@ -547,10 +564,14 @@ approve_devices() {
   local owner
   owner=$(sudo stat -c '%u:%g' "$PENDING_FILE")
 
-  # Initialize paired.json if it doesn't exist
+  # Detect paired.json format (object or array) -- initialize if missing
+  local paired_type="object"
   if [[ ! -f "$PAIRED_FILE" ]]; then
-    echo '[]' | sudo tee "$PAIRED_FILE" >/dev/null
+    # Match the format of pending.json for consistency, default to object
+    echo '{}' | sudo tee "$PAIRED_FILE" >/dev/null
     restore_ownership "$PAIRED_FILE" "$owner"
+  else
+    paired_type=$(sudo jq -r 'type' "$PAIRED_FILE" 2>/dev/null || echo "object")
   fi
 
   local paired_owner
@@ -559,18 +580,40 @@ approve_devices() {
   local ts
   ts="$(date +%s)000"
 
-  local tmp
-  tmp=$(mktemp)
-
-  # Merge pending into paired: add approvedAt timestamp, merge with existing
-  sudo jq --arg ts "$ts" '
-    [.[] | . + {"approvedAt": ($ts | tonumber), "status": "approved"}]
-  ' "$PENDING_FILE" > "$tmp"
-
   local merged
   merged=$(mktemp)
-  sudo jq -s '.[0] + .[1]' "$PAIRED_FILE" "$tmp" > "$merged"
-  rm -f "$tmp"
+
+  # Merge pending entries into paired, handling all format combinations:
+  #   paired=object + pending=array  (observed in the wild)
+  #   paired=object + pending=object
+  #   paired=array  + pending=array
+  #   paired=array  + pending=object
+  if [[ "$paired_type" == "object" && "$pending_type" == "array" ]]; then
+    # Convert pending array entries to object keyed by requestId/id, then merge
+    sudo jq -s --arg ts "$ts" '
+      .[0] as $paired | .[1] as $pending |
+      ($pending | map(
+        {(.requestId // .id // (. | tostring | .[0:8])): (. + {"approvedAt": ($ts | tonumber), "status": "approved"})}
+      ) | add // {}) as $new |
+      $paired * $new
+    ' "$PAIRED_FILE" "$PENDING_FILE" > "$merged"
+  elif [[ "$paired_type" == "object" && "$pending_type" == "object" ]]; then
+    sudo jq -s --arg ts "$ts" '
+      .[0] as $paired | .[1] as $pending |
+      ($pending | to_entries | map(
+        {(.key): (.value + {"approvedAt": ($ts | tonumber), "status": "approved"})}
+      ) | add // {}) as $new |
+      $paired * $new
+    ' "$PAIRED_FILE" "$PENDING_FILE" > "$merged"
+  elif [[ "$paired_type" == "array" && "$pending_type" == "array" ]]; then
+    sudo jq -s --arg ts "$ts" '
+      .[0] + [.[1][] | . + {"approvedAt": ($ts | tonumber), "status": "approved"}]
+    ' "$PAIRED_FILE" "$PENDING_FILE" > "$merged"
+  elif [[ "$paired_type" == "array" && "$pending_type" == "object" ]]; then
+    sudo jq -s --arg ts "$ts" '
+      .[0] + [.[1] | to_entries[] | .value + {"approvedAt": ($ts | tonumber), "status": "approved"}]
+    ' "$PAIRED_FILE" "$PENDING_FILE" > "$merged"
+  fi
 
   if ! jq empty "$merged" 2>/dev/null; then
     echo "Error: JSON validation failed. Pairing unchanged."
@@ -581,10 +624,14 @@ approve_devices() {
   sudo mv "$merged" "$PAIRED_FILE"
   restore_ownership "$PAIRED_FILE" "$paired_owner"
 
-  # Clear pending
+  # Clear pending (preserve original format)
   local empty_tmp
   empty_tmp=$(mktemp)
-  echo '[]' > "$empty_tmp"
+  if [[ "$pending_type" == "array" ]]; then
+    echo '[]' > "$empty_tmp"
+  else
+    echo '{}' > "$empty_tmp"
+  fi
   sudo mv "$empty_tmp" "$PENDING_FILE"
   restore_ownership "$PENDING_FILE" "$owner"
 
@@ -642,10 +689,22 @@ print_status() {
   find_device_files
   local pending_count=0 paired_count=0
   if [[ -n "$PENDING_FILE" && -f "$PENDING_FILE" ]]; then
-    pending_count=$(sudo jq 'length' "$PENDING_FILE" 2>/dev/null || echo "0")
+    local pt
+    pt=$(sudo jq -r 'type' "$PENDING_FILE" 2>/dev/null || echo "unknown")
+    if [[ "$pt" == "object" ]]; then
+      pending_count=$(sudo jq 'keys | length' "$PENDING_FILE" 2>/dev/null || echo "0")
+    else
+      pending_count=$(sudo jq 'length' "$PENDING_FILE" 2>/dev/null || echo "0")
+    fi
   fi
   if [[ -n "$PAIRED_FILE" && -f "$PAIRED_FILE" ]]; then
-    paired_count=$(sudo jq 'length' "$PAIRED_FILE" 2>/dev/null || echo "0")
+    local pt
+    pt=$(sudo jq -r 'type' "$PAIRED_FILE" 2>/dev/null || echo "unknown")
+    if [[ "$pt" == "object" ]]; then
+      paired_count=$(sudo jq 'keys | length' "$PAIRED_FILE" 2>/dev/null || echo "0")
+    else
+      paired_count=$(sudo jq 'length' "$PAIRED_FILE" 2>/dev/null || echo "0")
+    fi
   fi
   echo "  Paired                : $paired_count"
   echo "  Pending               : $pending_count"
