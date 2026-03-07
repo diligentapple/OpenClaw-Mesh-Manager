@@ -234,13 +234,17 @@ edit_config_enable() {
   local origins_json
   if [[ -n "$TS_HOSTNAME" ]]; then
     origins_json=$(jq -n \
-      --arg ts_https "https://${TS_HOSTNAME}" \
+      --arg ts_https "https://${TS_HOSTNAME}:${API_PORT}" \
       --arg ts_ip "http://${TS_IP}:${API_PORT}" \
-      '["http://localhost:18789", "http://127.0.0.1:18789", $ts_https, $ts_ip]')
+      --arg local_api "http://localhost:${API_PORT}" \
+      --arg local_loop "http://127.0.0.1:${API_PORT}" \
+      '[$local_api, $local_loop, $ts_https, $ts_ip]')
   else
     origins_json=$(jq -n \
       --arg ts_ip "http://${TS_IP}:${API_PORT}" \
-      '["http://localhost:18789", "http://127.0.0.1:18789", $ts_ip]')
+      --arg local_api "http://localhost:${API_PORT}" \
+      --arg local_loop "http://127.0.0.1:${API_PORT}" \
+      '[$local_api, $local_loop, $ts_ip]')
   fi
 
   local tmp
@@ -443,27 +447,12 @@ setup_firewall() {
 # ---------------------------------------------------------------------------
 
 setup_tailscale_serve() {
-  local ts_serve_status
-  ts_serve_status=$(sudo tailscale serve status 2>/dev/null || echo "")
-
-  if [[ -n "$ts_serve_status" ]] && ! echo "$ts_serve_status" | grep -q ":${API_PORT}"; then
-    echo "Warning: Tailscale Serve is already active for a different port."
-    echo "  Only one instance can use https://${TS_HOSTNAME}/ at a time."
-    echo "Current config:"
-    echo "$ts_serve_status"
-    echo ""
-    read -r -p "Replace with port $API_PORT? [y/N] " CONFIRM
-    if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
-      sudo tailscale serve --https=443 off 2>/dev/null || true
-    else
-      echo "Keeping existing Tailscale Serve config."
-      echo "This instance is accessible via: http://${TS_IP}:${API_PORT}"
-      return 0
-    fi
-  fi
-
-  echo "Setting up Tailscale Serve (HTTPS proxy to port $API_PORT)..."
-  if ! sudo tailscale serve --bg "$API_PORT" 2>&1; then
+  # Each instance gets its own HTTPS port matching its API port (N8789),
+  # so multiple instances can coexist on the same Tailscale hostname:
+  #   Instance 1: https://hostname:18789/
+  #   Instance 2: https://hostname:28789/
+  echo "Setting up Tailscale Serve (HTTPS :${API_PORT} -> localhost:${API_PORT})..."
+  if ! sudo tailscale serve --bg --https="$API_PORT" "http://127.0.0.1:${API_PORT}" 2>&1; then
     echo "Warning: tailscale serve failed."
     echo "  Possible causes:"
     echo "  - MagicDNS not enabled (enable at https://login.tailscale.com/admin/dns)"
@@ -475,8 +464,8 @@ setup_tailscale_serve() {
 }
 
 stop_tailscale_serve() {
-  sudo tailscale serve --https=443 off 2>/dev/null || true
-  echo "Tailscale Serve stopped."
+  sudo tailscale serve --https="$API_PORT" off 2>/dev/null || true
+  echo "Tailscale Serve stopped for port $API_PORT."
 }
 
 # ---------------------------------------------------------------------------
@@ -683,7 +672,7 @@ print_summary() {
   echo ""
 
   if [[ -n "$TS_HOSTNAME" ]]; then
-    echo "  Dashboard URL : https://${TS_HOSTNAME}/${token_param}"
+    echo "  Dashboard URL : https://${TS_HOSTNAME}:${API_PORT}/${token_param}"
   fi
   echo "  Fallback URL  : http://${TS_IP}:${API_PORT}/${token_param}"
   echo "  Gateway token : $gateway_token"
