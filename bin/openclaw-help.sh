@@ -51,11 +51,12 @@ MONITORING
   openclaw-list
       Show all running OpenClaw containers with their port mappings.
 
-  Health check:
-      curl http://127.0.0.1:N8789/health
+  openclaw-health N
+      Health check for instance #N.
 
-  Logs:
-      docker logs -f openclawN-gateway
+  openclaw-logs N [--tail N]
+      Follow container logs for instance #N.
+      Extra flags are passed through to docker logs (e.g. --tail 50).
 
 REMOTE ACCESS (via Tailscale)
 -----------------------------
