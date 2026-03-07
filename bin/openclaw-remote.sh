@@ -288,8 +288,7 @@ edit_config_disable() {
   sudo jq '
     .gateway.bind = "loopback" |
     del(.gateway.controlUi.allowedOrigins) |
-    del(.gateway.controlUi.allowInsecureAuth) |
-    if .gateway.controlUi == {} then del(.gateway.controlUi) else . end
+    if (.gateway.controlUi | keys) == ["allowInsecureAuth"] then . else . end
   ' "$config" > "$tmp"
 
   if ! jq empty "$tmp" 2>/dev/null; then
