@@ -38,9 +38,16 @@ if [[ "$CONFIRM" != "DELETE" ]]; then
   exit 1
 fi
 
-# Clean up tailscale serve for this instance
+# Clean up tailscale serve for this instance's API port
 if command -v tailscale >/dev/null 2>&1; then
-  sudo tailscale serve --https="${N}443" off 2>/dev/null || true
+  API_PORT=$(docker port "$CONTAINER" 18789/tcp 2>/dev/null | head -1 | cut -d: -f2 || echo "")
+  if [[ -z "${API_PORT:-}" ]]; then
+    # Container may already be stopped; fall back to compose file
+    API_PORT=$(grep -oP '"\K[0-9]+(?=:18789")' "${INSTANCE_DIR}/docker-compose.yml" 2>/dev/null || echo "")
+  fi
+  if [[ -n "${API_PORT:-}" ]]; then
+    sudo tailscale serve --https="$API_PORT" off 2>/dev/null || true
+  fi
 fi
 
 # Prefer compose down if compose file exists

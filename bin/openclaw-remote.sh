@@ -231,11 +231,10 @@ edit_config_enable() {
 
   sudo cp "$config" "${config}.bak"
 
-  local https_port="${N}443"
   local origins_json
   if [[ -n "$TS_HOSTNAME" ]]; then
     origins_json=$(jq -n \
-      --arg ts_https "https://${TS_HOSTNAME}:${https_port}" \
+      --arg ts_https "https://${TS_HOSTNAME}:${API_PORT}" \
       --arg ts_ip "http://${TS_IP}:${API_PORT}" \
       --arg local_api "http://localhost:${API_PORT}" \
       --arg local_loop "http://127.0.0.1:${API_PORT}" \
@@ -443,19 +442,18 @@ setup_firewall() {
 # ---------------------------------------------------------------------------
 
 setup_tailscale_serve() {
-  # Use a separate HTTPS port (N443) so it doesn't conflict with Docker's
-  # host port binding (N8789):
-  #   Instance 1: https://hostname:1443/ -> 127.0.0.1:18789
-  #   Instance 2: https://hostname:2443/ -> 127.0.0.1:28789
-  HTTPS_PORT="${N}443"
-  if ! sudo tailscale serve --bg --https="$HTTPS_PORT" "http://127.0.0.1:${API_PORT}" 2>&1; then
+  # Use the same API port for Tailscale HTTPS serve -- Tailscale intercepts
+  # traffic at the WireGuard layer so it doesn't conflict with Docker's host
+  # port binding on 0.0.0.0.
+  #   Instance 1: https://hostname:18789/ -> 127.0.0.1:18789
+  #   Instance 2: https://hostname:28789/ -> 127.0.0.1:28789
+  if ! sudo tailscale serve --bg --https="$API_PORT" "http://127.0.0.1:${API_PORT}" 2>&1; then
     echo "Warning: tailscale serve failed. Use fallback: http://${TS_IP}:${API_PORT}"
   fi
 }
 
 stop_tailscale_serve() {
-  HTTPS_PORT="${N}443"
-  sudo tailscale serve --https="$HTTPS_PORT" off 2>/dev/null || true
+  sudo tailscale serve --https="$API_PORT" off 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
@@ -652,13 +650,11 @@ print_summary() {
     token_param="?token=${gateway_token}"
   fi
 
-  local https_port="${N}443"
-
   echo ""
   echo "Remote access enabled for instance #$N"
   echo ""
   if [[ -n "$TS_HOSTNAME" ]]; then
-    echo "  Dashboard : https://${TS_HOSTNAME}:${https_port}/${token_param}"
+    echo "  Dashboard : https://${TS_HOSTNAME}:${API_PORT}/${token_param}"
   fi
   echo "  Fallback  : http://${TS_IP}:${API_PORT}/${token_param}"
   echo "  Token     : $gateway_token"
@@ -666,6 +662,56 @@ print_summary() {
   echo "  Approve   : openclaw-remote $N --approve"
   echo "  Status    : openclaw-remote $N --status"
   echo "  Disable   : openclaw-remote $N --off"
+}
+
+# ---------------------------------------------------------------------------
+# Wait for pending devices and auto-approve
+# ---------------------------------------------------------------------------
+
+wait_and_approve() {
+  local timeout=120
+  local interval=3
+  local elapsed=0
+
+  while [[ "$elapsed" -lt "$timeout" ]]; do
+    local cli_output
+    cli_output=$(docker exec "$CONTAINER" node /app/dist/index.js devices list 2>&1) || true
+
+    local request_ids
+    request_ids=$(echo "$cli_output" | \
+      grep -oP '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | \
+      sort -u) || true
+
+    if [[ -n "$request_ids" ]]; then
+      echo ""
+      local count
+      count=$(echo "$request_ids" | wc -l)
+      echo "Found $count pending device(s). Auto-approving..."
+
+      local approved=0
+      while read -r rid; do
+        if docker exec "$CONTAINER" node /app/dist/index.js devices approve "$rid" 2>&1; then
+          ((approved++))
+        elif docker exec "$CONTAINER" node /app/dist/index.js pairing approve "$rid" 2>&1; then
+          ((approved++))
+        else
+          echo "  Warning: Could not approve $rid"
+        fi
+      done <<< "$request_ids"
+
+      echo "Approved $approved device(s)."
+      restart_and_wait
+      echo "Device paired. You can now use the dashboard."
+      return 0
+    fi
+
+    sleep "$interval"
+    elapsed=$((elapsed + interval))
+  done
+
+  echo ""
+  echo "No devices connected within ${timeout}s."
+  echo "  When ready, approve manually: openclaw-remote $N --approve"
 }
 
 # ---------------------------------------------------------------------------
@@ -684,8 +730,15 @@ do_enable() {
     setup_tailscale_serve
   fi
 
-  AUTO_YES=true approve_devices
   print_summary
+
+  # Poll for pending devices and auto-approve so the user can just open the
+  # dashboard URL on their laptop/browser and get paired without running a
+  # separate command.
+  echo "Waiting for device pairing requests (open the dashboard URL above)..."
+  echo "  Press Ctrl-C to stop waiting."
+  echo ""
+  wait_and_approve
 }
 
 do_disable() {
