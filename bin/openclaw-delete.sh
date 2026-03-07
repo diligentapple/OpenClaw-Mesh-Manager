@@ -38,6 +38,18 @@ if [[ "$CONFIRM" != "DELETE" ]]; then
   exit 1
 fi
 
+# Clean up tailscale serve if active for this instance's port (before stopping container)
+if command -v tailscale >/dev/null 2>&1; then
+  API_PORT=$(docker port "${CONTAINER}" 18789/tcp 2>/dev/null | head -1 | cut -d: -f2 || echo "")
+  if [[ -n "${API_PORT:-}" ]]; then
+    ts_serve_status=$(sudo tailscale serve status 2>/dev/null || echo "")
+    if echo "$ts_serve_status" | grep -q ":${API_PORT}"; then
+      echo "Stopping Tailscale Serve for port $API_PORT..."
+      sudo tailscale serve --https=443 off 2>/dev/null || true
+    fi
+  fi
+fi
+
 # Prefer compose down if compose file exists
 if [[ -f "${INSTANCE_DIR}/docker-compose.yml" ]]; then
   $COMPOSE_BIN -f "${INSTANCE_DIR}/docker-compose.yml" down -v || true

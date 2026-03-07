@@ -154,3 +154,10 @@ echo "Health:"
 echo "  curl http://127.0.0.1:${API_PORT}/health"
 echo "Logs:"
 echo "  docker logs -f ${CONTAINER}"
+
+# Tailscale hint
+if command -v tailscale >/dev/null 2>&1; then
+  echo ""
+  echo "Remote access (via Tailscale):"
+  echo "  openclaw-remote $N"
+fi
