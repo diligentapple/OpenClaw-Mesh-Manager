@@ -52,6 +52,49 @@ restore_ownership() {
   fi
 }
 
+# Find pending.json and paired.json in the data directory.
+# OpenClaw stores these in subdirectories (nodes/ or devices/) depending on version.
+find_device_files() {
+  PENDING_FILE=""
+  PAIRED_FILE=""
+  DEVICES_DIR=""
+
+  # Search known subdirectory locations
+  local candidate
+  for candidate in \
+    "${DATA_DIR}/nodes" \
+    "${DATA_DIR}/devices" \
+    "${DATA_DIR}"; do
+    if [[ -f "${candidate}/pending.json" ]] || [[ -f "${candidate}/paired.json" ]]; then
+      DEVICES_DIR="$candidate"
+      break
+    fi
+  done
+
+  # If no files found yet, search recursively for pending.json
+  if [[ -z "$DEVICES_DIR" ]]; then
+    local found
+    found=$(sudo find "$DATA_DIR" -name "pending.json" -type f 2>/dev/null | head -1)
+    if [[ -n "$found" ]]; then
+      DEVICES_DIR=$(dirname "$found")
+    fi
+  fi
+
+  # Still nothing -- try paired.json
+  if [[ -z "$DEVICES_DIR" ]]; then
+    local found
+    found=$(sudo find "$DATA_DIR" -name "paired.json" -type f 2>/dev/null | head -1)
+    if [[ -n "$found" ]]; then
+      DEVICES_DIR=$(dirname "$found")
+    fi
+  fi
+
+  if [[ -n "$DEVICES_DIR" ]]; then
+    PENDING_FILE="${DEVICES_DIR}/pending.json"
+    PAIRED_FILE="${DEVICES_DIR}/paired.json"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Parse arguments
 # ---------------------------------------------------------------------------
@@ -460,25 +503,37 @@ restart_and_wait() {
 # ---------------------------------------------------------------------------
 
 approve_devices() {
-  local pending_file="${DATA_DIR}/pending.json"
-  local paired_file="${DATA_DIR}/paired.json"
+  find_device_files
 
-  if [[ ! -f "$pending_file" ]]; then
+  if [[ -z "$PENDING_FILE" ]]; then
     echo "No pending devices file found."
+    echo "  Searched: ${DATA_DIR}/nodes/, ${DATA_DIR}/devices/, ${DATA_DIR}/"
+    echo "  The device may not have sent a pairing request yet, or OpenClaw"
+    echo "  stores pairing data in an unexpected location."
+    echo ""
+    echo "  Try checking inside the container:"
+    echo "    docker exec ${CONTAINER} find /home/node/.openclaw -name pending.json"
+    return 0
+  fi
+
+  if [[ ! -f "$PENDING_FILE" ]]; then
+    echo "No pending devices file found at: $PENDING_FILE"
     return 0
   fi
 
   local pending_count
-  pending_count=$(sudo jq 'length' "$pending_file" 2>/dev/null || echo "0")
+  pending_count=$(sudo jq 'length' "$PENDING_FILE" 2>/dev/null || echo "0")
 
   if [[ "$pending_count" == "0" || "$pending_count" == "null" ]]; then
     echo "No pending device pairing requests."
+    echo "  Checked: $PENDING_FILE"
     return 0
   fi
 
   echo "Pending device pairing requests ($pending_count):"
-  sudo jq -r '.[] | "  - \(.name // .id // "unknown") (\(.type // "unknown"))"' "$pending_file" 2>/dev/null || \
-    sudo jq '.' "$pending_file"
+  echo "  Source: $PENDING_FILE"
+  sudo jq -r '.[] | "  - \(.name // .id // "unknown") (\(.type // "unknown"))"' "$PENDING_FILE" 2>/dev/null || \
+    sudo jq '.' "$PENDING_FILE"
   echo ""
 
   if [[ "$AUTO_YES" != true ]]; then
@@ -490,16 +545,16 @@ approve_devices() {
   fi
 
   local owner
-  owner=$(sudo stat -c '%u:%g' "$pending_file")
+  owner=$(sudo stat -c '%u:%g' "$PENDING_FILE")
 
   # Initialize paired.json if it doesn't exist
-  if [[ ! -f "$paired_file" ]]; then
-    echo '[]' | sudo tee "$paired_file" >/dev/null
-    restore_ownership "$paired_file" "$owner"
+  if [[ ! -f "$PAIRED_FILE" ]]; then
+    echo '[]' | sudo tee "$PAIRED_FILE" >/dev/null
+    restore_ownership "$PAIRED_FILE" "$owner"
   fi
 
   local paired_owner
-  paired_owner=$(sudo stat -c '%u:%g' "$paired_file")
+  paired_owner=$(sudo stat -c '%u:%g' "$PAIRED_FILE")
 
   local ts
   ts="$(date +%s)000"
@@ -510,11 +565,11 @@ approve_devices() {
   # Merge pending into paired: add approvedAt timestamp, merge with existing
   sudo jq --arg ts "$ts" '
     [.[] | . + {"approvedAt": ($ts | tonumber), "status": "approved"}]
-  ' "$pending_file" > "$tmp"
+  ' "$PENDING_FILE" > "$tmp"
 
   local merged
   merged=$(mktemp)
-  sudo jq -s '.[0] + .[1]' "$paired_file" "$tmp" > "$merged"
+  sudo jq -s '.[0] + .[1]' "$PAIRED_FILE" "$tmp" > "$merged"
   rm -f "$tmp"
 
   if ! jq empty "$merged" 2>/dev/null; then
@@ -523,15 +578,15 @@ approve_devices() {
     return 1
   fi
 
-  sudo mv "$merged" "$paired_file"
-  restore_ownership "$paired_file" "$paired_owner"
+  sudo mv "$merged" "$PAIRED_FILE"
+  restore_ownership "$PAIRED_FILE" "$paired_owner"
 
   # Clear pending
   local empty_tmp
   empty_tmp=$(mktemp)
   echo '[]' > "$empty_tmp"
-  sudo mv "$empty_tmp" "$pending_file"
-  restore_ownership "$pending_file" "$owner"
+  sudo mv "$empty_tmp" "$PENDING_FILE"
+  restore_ownership "$PENDING_FILE" "$owner"
 
   echo "Approved $pending_count device(s)."
 
@@ -584,15 +639,21 @@ print_status() {
   echo ""
 
   echo "Devices:"
+  find_device_files
   local pending_count=0 paired_count=0
-  if [[ -f "${DATA_DIR}/pending.json" ]]; then
-    pending_count=$(sudo jq 'length' "${DATA_DIR}/pending.json" 2>/dev/null || echo "0")
+  if [[ -n "$PENDING_FILE" && -f "$PENDING_FILE" ]]; then
+    pending_count=$(sudo jq 'length' "$PENDING_FILE" 2>/dev/null || echo "0")
   fi
-  if [[ -f "${DATA_DIR}/paired.json" ]]; then
-    paired_count=$(sudo jq 'length' "${DATA_DIR}/paired.json" 2>/dev/null || echo "0")
+  if [[ -n "$PAIRED_FILE" && -f "$PAIRED_FILE" ]]; then
+    paired_count=$(sudo jq 'length' "$PAIRED_FILE" 2>/dev/null || echo "0")
   fi
   echo "  Paired                : $paired_count"
   echo "  Pending               : $pending_count"
+  if [[ -n "$DEVICES_DIR" ]]; then
+    echo "  Data dir              : $DEVICES_DIR"
+  else
+    echo "  Data dir              : (not found)"
+  fi
   echo ""
 
   echo "Firewall:"

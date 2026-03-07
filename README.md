@@ -122,6 +122,14 @@ openclaw-update N
 openclaw-list
 ```
 
+### Help
+
+```bash
+openclaw-help
+```
+
+Shows a complete reference of all available commands with usage details, options, and examples.
+
 ### Delete an instance
 
 ```bash
