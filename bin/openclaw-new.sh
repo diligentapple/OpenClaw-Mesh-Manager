@@ -213,13 +213,14 @@ apply_preset() {
   timestamp=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
 
   # Render preset template with instance-specific values
+  # Use | as delimiter for API_KEY since keys may contain /
   local tmp
   tmp=$(mktemp)
   sed \
     -e "s/{{API_PORT}}/${api_port}/g" \
     -e "s/{{TOKEN}}/${token}/g" \
     -e "s/{{TIMESTAMP}}/${timestamp}/g" \
-    -e "s/{{API_KEY}}/${API_KEY}/g" \
+    -e "s|{{API_KEY}}|${API_KEY}|g" \
     "$preset_file" > "$tmp"
 
   # Data dir is owned by uid 1000 (container node user), so use sudo
