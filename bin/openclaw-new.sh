@@ -161,9 +161,47 @@ fi
 # Apply a preset: render template and write openclaw.json directly
 # ---------------------------------------------------------------------------
 
+SHARE_DIR="${OPENCLAW_MGR_SHARE:-/usr/local/share/openclaw-manager}"
+
 gen_token() {
   # 24-byte hex token (48 chars)
   head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n'
+}
+
+# Prompt for API key on first use of a preset that contains {{API_KEY}},
+# then cache it so subsequent instances reuse the same key.
+resolve_api_key() {
+  local preset_file="$1"
+
+  # Check if preset uses the {{API_KEY}} placeholder at all
+  if ! grep -q '{{API_KEY}}' "$preset_file"; then
+    API_KEY=""
+    return
+  fi
+
+  local cache_file="${SHARE_DIR}/.api_key"
+
+  # Already cached?
+  if [[ -f "$cache_file" ]]; then
+    API_KEY=$(cat "$cache_file")
+    if [[ -n "$API_KEY" ]]; then
+      return
+    fi
+  fi
+
+  # First time — prompt
+  echo ""
+  read -r -p "Enter your LLM API key (e.g. OpenRouter): " API_KEY
+  if [[ -z "$API_KEY" ]]; then
+    echo "Warning: empty API key. Instances won't be able to call the LLM."
+    echo "         You can set it later in each instance's openclaw.json."
+    return
+  fi
+
+  # Cache for future preset uses
+  sudo tee "$cache_file" > /dev/null <<< "$API_KEY"
+  sudo chmod 600 "$cache_file"
+  echo "API key saved for future preset uses."
 }
 
 apply_preset() {
@@ -181,6 +219,7 @@ apply_preset() {
     -e "s/{{API_PORT}}/${api_port}/g" \
     -e "s/{{TOKEN}}/${token}/g" \
     -e "s/{{TIMESTAMP}}/${timestamp}/g" \
+    -e "s/{{API_KEY}}/${API_KEY}/g" \
     "$preset_file" > "$tmp"
 
   # Data dir is owned by uid 1000 (container node user), so use sudo
@@ -278,6 +317,12 @@ create_instance() {
 
 CREATED=0
 FAILED=0
+
+# Prompt for API key once before creating any instances
+API_KEY=""
+if [[ -n "$PRESET_FILE" ]]; then
+  resolve_api_key "$PRESET_FILE"
+fi
 
 for (( i=RANGE_START; i<=RANGE_END; i++ )); do
   if [[ "$IS_RANGE" == true ]]; then

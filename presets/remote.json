@@ -9,7 +9,8 @@
     "profiles": {
       "openrouter:default": {
         "provider": "openrouter",
-        "mode": "api_key"
+        "mode": "api_key",
+        "apiKey": "{{API_KEY}}"
       }
     }
   },
