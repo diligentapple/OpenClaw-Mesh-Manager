@@ -175,14 +175,18 @@ apply_preset() {
   timestamp=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
 
   # Render preset template with instance-specific values
+  local tmp
+  tmp=$(mktemp)
   sed \
     -e "s/{{API_PORT}}/${api_port}/g" \
     -e "s/{{TOKEN}}/${token}/g" \
     -e "s/{{TIMESTAMP}}/${timestamp}/g" \
-    "$preset_file" > "$config"
+    "$preset_file" > "$tmp"
 
-  # Match container uid (1000:1000 = node user inside container)
-  chown 1000:1000 "$config" 2>/dev/null || sudo chown 1000:1000 "$config" 2>/dev/null || true
+  # Data dir is owned by uid 1000 (container node user), so use sudo
+  sudo cp "$tmp" "$config"
+  sudo chown 1000:1000 "$config"
+  rm -f "$tmp"
 
   # Restart to pick up new config
   local container="openclaw${n}-gateway"
