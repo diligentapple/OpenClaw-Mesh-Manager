@@ -73,17 +73,6 @@ create_preset() {
     fi
   fi
 
-  # --- Network binding ---
-  echo ""
-  echo "Network binding:"
-  echo "  1) loopback  - Local access only (default)"
-  echo "  2) lan       - Allow LAN/Tailscale remote access"
-  read -r -p "Choice [1]: " bind_choice
-  local bind="loopback"
-  if [[ "$bind_choice" == "2" ]]; then
-    bind="lan"
-  fi
-
   # --- AI provider ---
   echo ""
   echo "AI provider:"
@@ -96,6 +85,19 @@ create_preset() {
     2) provider="anthropic" ;;
     3) provider="openai" ;;
   esac
+
+  # --- API key ---
+  echo ""
+  local api_env_var=""
+  case "$provider" in
+    openrouter) api_env_var="OPENROUTER_API_KEY" ;;
+    anthropic)  api_env_var="ANTHROPIC_API_KEY" ;;
+    openai)     api_env_var="OPENAI_API_KEY" ;;
+  esac
+  read -r -p "${provider} API key: " api_key
+  if [[ -z "$api_key" ]]; then
+    echo "Warning: empty API key. Set ${api_env_var} in the container environment or edit the preset later."
+  fi
 
   # --- Model ---
   echo ""
@@ -122,17 +124,17 @@ create_preset() {
     fi
   fi
 
-  # --- Max concurrent ---
-  echo ""
-  read -r -p "Max concurrent agents [4]: " max_concurrent_input
-  local max_concurrent="${max_concurrent_input:-4}"
-
-  # --- Allow insecure auth ---
-  echo ""
-  read -r -p "Allow insecure auth (HTTP without HTTPS)? [Y/n]: " insecure_choice
-  local insecure=true
-  if [[ "${insecure_choice,,}" == "n" ]]; then
-    insecure=false
+  # --- Tailscale remote access ---
+  local bind="loopback"
+  local tailscale_mode="off"
+  if command -v tailscale >/dev/null 2>&1; then
+    echo ""
+    read -r -p "Enable Tailscale remote access? [y/N]: " ts_choice
+    if [[ "${ts_choice,,}" == "y" ]]; then
+      bind="lan"
+      tailscale_mode="off"  # openclaw-remote handles the actual serve setup
+      echo "  Network binding set to 'lan', insecure auth enabled."
+    fi
   fi
 
   # --- Build JSON ---
@@ -156,13 +158,30 @@ create_preset() {
     }')
   fi
 
+  local auth_block='{}'
+  if [[ -n "$api_key" ]]; then
+    auth_block=$(jq -n \
+      --arg provider "$provider" \
+      --arg key "$api_key" \
+      '{
+        auth: {
+          profiles: {
+            "\($provider):default": {
+              provider: $provider,
+              mode: "api_key",
+              apiKey: $key
+            }
+          }
+        }
+      }')
+  fi
+
   local base_json
   base_json=$(jq -n \
     --arg bind "$bind" \
     --arg provider "$provider" \
     --arg model "$model" \
-    --argjson insecure "$insecure" \
-    --argjson maxConcurrent "$max_concurrent" \
+    --arg tailscale_mode "$tailscale_mode" \
     '{
       wizard: {
         lastRunAt: "{{TIMESTAMP}}",
@@ -184,8 +203,8 @@ create_preset() {
           models: { ($model): {} },
           workspace: "/home/node/.openclaw/workspace",
           compaction: { mode: "safeguard" },
-          maxConcurrent: $maxConcurrent,
-          subagents: { maxConcurrent: ($maxConcurrent * 2) }
+          maxConcurrent: 4,
+          subagents: { maxConcurrent: 8 }
         }
       },
       tools: { profile: "messaging" },
@@ -202,7 +221,7 @@ create_preset() {
         mode: "local",
         bind: $bind,
         auth: { mode: "token", token: "{{TOKEN}}" },
-        tailscale: { mode: "off", resetOnExit: false },
+        tailscale: { mode: $tailscale_mode, resetOnExit: false },
         nodes: {
           denyCommands: [
             "camera.snap", "camera.clip", "screen.record",
@@ -214,7 +233,7 @@ create_preset() {
             "http://localhost:{{API_PORT}}",
             "http://127.0.0.1:{{API_PORT}}"
           ],
-          allowInsecureAuth: $insecure
+          allowInsecureAuth: true
         }
       },
       plugins: { entries: {} },
@@ -224,12 +243,13 @@ create_preset() {
       }
     }')
 
-  # Merge telegram block if enabled
-  local json
+  # Merge optional blocks
+  local json="$base_json"
+  if [[ -n "$api_key" ]]; then
+    json=$(echo "$json" "$auth_block" | jq -s '.[0] * .[1]')
+  fi
   if [[ "$tg_enabled" == true ]]; then
-    json=$(echo "$base_json" "$tg_block" | jq -s '.[0] * .[1]')
-  else
-    json="$base_json"
+    json=$(echo "$json" "$tg_block" | jq -s '.[0] * .[1]')
   fi
 
   echo ""
