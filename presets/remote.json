@@ -1,8 +1,90 @@
 {
+  "wizard": {
+    "lastRunAt": "{{TIMESTAMP}}",
+    "lastRunVersion": "2026.3.2",
+    "lastRunCommand": "preset",
+    "lastRunMode": "local"
+  },
+  "auth": {
+    "profiles": {
+      "openrouter:default": {
+        "provider": "openrouter",
+        "mode": "api_key"
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openrouter/anthropic/claude-haiku-4.5"
+      },
+      "models": {
+        "openrouter/auto": {
+          "alias": "OpenRouter"
+        },
+        "openrouter/anthropic/claude-haiku-4.5": {}
+      },
+      "workspace": "/home/node/.openclaw/workspace",
+      "compaction": {
+        "mode": "safeguard"
+      },
+      "maxConcurrent": 4,
+      "subagents": {
+        "maxConcurrent": 8
+      }
+    }
+  },
+  "tools": {
+    "profile": "messaging"
+  },
+  "messages": {
+    "ackReactionScope": "group-mentions"
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+  "session": {
+    "dmScope": "per-channel-peer"
+  },
   "gateway": {
+    "port": 18789,
+    "mode": "local",
     "bind": "lan",
+    "auth": {
+      "mode": "token",
+      "token": "{{TOKEN}}"
+    },
+    "tailscale": {
+      "mode": "off",
+      "resetOnExit": false
+    },
+    "nodes": {
+      "denyCommands": [
+        "camera.snap",
+        "camera.clip",
+        "screen.record",
+        "contacts.add",
+        "calendar.add",
+        "reminders.add",
+        "sms.send"
+      ]
+    },
     "controlUi": {
+      "allowedOrigins": [
+        "http://localhost:{{API_PORT}}",
+        "http://127.0.0.1:{{API_PORT}}"
+      ],
       "allowInsecureAuth": true
     }
+  },
+  "plugins": {
+    "entries": {}
+  },
+  "meta": {
+    "lastTouchedVersion": "2026.3.2",
+    "lastTouchedAt": "{{TIMESTAMP}}"
   }
 }

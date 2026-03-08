@@ -158,46 +158,37 @@ if [[ "$PULL" == true ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Apply a preset: run onboarding non-interactively, then merge preset values
+# Apply a preset: render template and write openclaw.json directly
 # ---------------------------------------------------------------------------
 
+gen_token() {
+  # 24-byte hex token (48 chars)
+  head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n'
+}
+
 apply_preset() {
-  local n="$1" data_dir="$2" preset_file="$3"
-  local container="openclaw${n}-gateway"
+  local n="$1" api_port="$2" data_dir="$3" preset_file="$4"
   local config="${data_dir}/openclaw.json"
+  local token
+  token=$(gen_token)
+  local timestamp
+  timestamp=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
 
-  echo "Running onboarding (non-interactive)..."
-  docker exec "$container" openclaw onboard --non-interactive 2>/dev/null || true
+  # Render preset template with instance-specific values
+  sed \
+    -e "s/{{API_PORT}}/${api_port}/g" \
+    -e "s/{{TOKEN}}/${token}/g" \
+    -e "s/{{TIMESTAMP}}/${timestamp}/g" \
+    "$preset_file" > "$config"
 
-  # Wait briefly for config to be written
-  local tries=0
-  while [[ ! -f "$config" ]] && [[ $tries -lt 10 ]]; do
-    sleep 1
-    ((tries++)) || true
-  done
+  # Match container uid (1000:1000 = node user inside container)
+  chown 1000:1000 "$config" 2>/dev/null || sudo chown 1000:1000 "$config" 2>/dev/null || true
 
-  if [[ ! -f "$config" ]]; then
-    echo "Warning: openclaw.json not generated. Preset not applied."
-    return 1
-  fi
+  # Restart to pick up new config
+  local container="openclaw${n}-gateway"
+  docker restart "$container" >/dev/null 2>&1 || true
 
-  # Merge preset values into the generated config
-  local tmp
-  tmp=$(mktemp)
-  if sudo jq -s '.[0] * .[1]' "$config" "$preset_file" > "$tmp" && jq empty "$tmp" 2>/dev/null; then
-    local owner
-    owner=$(sudo stat -c '%u:%g' "$config")
-    sudo mv "$tmp" "$config"
-    sudo chown "$owner" "$config"
-    echo "Preset '${PRESET}' applied."
-
-    # Restart to pick up new config
-    docker restart "$container" >/dev/null 2>&1 || true
-  else
-    rm -f "$tmp"
-    echo "Warning: failed to apply preset."
-    return 1
-  fi
+  echo "Preset '${PRESET}' applied (token: ${token:0:12}...)"
 }
 
 # ---------------------------------------------------------------------------
@@ -265,7 +256,7 @@ create_instance() {
 
   # Apply preset if specified
   if [[ -n "$PRESET_FILE" ]]; then
-    apply_preset "$N" "$DATA_DIR" "$PRESET_FILE"
+    apply_preset "$N" "$API_PORT" "$DATA_DIR" "$PRESET_FILE"
   fi
 
   echo ""
