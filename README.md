@@ -47,13 +47,68 @@ openclaw-new N
 
 Example: `openclaw-new 3` creates instance #3.
 
+Create and immediately run onboarding:
+
+```bash
+openclaw-new -o 3
+```
+
+Create a range of instances:
+
+```bash
+openclaw-new 2-4
+```
+
 To force pulling the latest image before creating:
 
 ```bash
 openclaw-new --pull N
 ```
 
-### Onboarding (required after creating)
+### Presets (skip onboarding)
+
+Presets let you create fully configured instances without running the interactive onboarding wizard. On first use, you'll be prompted for your LLM API key which is cached for future runs.
+
+```bash
+# Create a single instance with the default preset
+openclaw-new 3 --preset default
+
+# Create multiple instances at once
+openclaw-new 2-4 --preset default
+
+# Use the remote preset (LAN binding for Tailscale)
+openclaw-new 2-4 --preset remote
+```
+
+Built-in presets:
+
+| Preset    | Binding   | Description                        |
+|-----------|-----------|------------------------------------|
+| `default` | loopback  | Local access only                  |
+| `remote`  | lan       | LAN binding for Tailscale access   |
+
+#### Managing presets
+
+```bash
+# List available presets
+openclaw-preset list
+
+# Show a preset's contents
+openclaw-preset show default
+
+# Interactively create a custom preset
+openclaw-preset create
+```
+
+`openclaw-preset create` prompts for:
+- AI provider (OpenRouter, Anthropic, OpenAI) and API key
+- Primary model
+- Telegram bot integration (optional)
+- Tailscale remote access (if Tailscale is installed)
+
+### Onboarding (alternative to presets)
+
+If you didn't use `--preset`, run the interactive onboarding wizard:
 
 ```bash
 openclaw-onboard N
@@ -82,11 +137,8 @@ Replace `1` with your instance number and `XXXXXX` with the actual pairing code 
 ### Health check / logs
 
 ```bash
-# Health check
-curl http://127.0.0.1:N8789/health
-
-# Logs
-docker logs -f openclawN-gateway
+openclaw-health N
+openclaw-logs N
 ```
 
 ### Run commands inside an instance
@@ -132,6 +184,7 @@ Shows a complete reference of all available commands with usage details, options
 
 ```bash
 openclaw-delete N
+openclaw-delete 2-4    # delete a range
 ```
 
 You will be prompted to type `DELETE` to confirm.
@@ -153,6 +206,25 @@ Each instance N gets deterministic ports:
 |-------------------|----------------------------------|
 | `~/openclawN/`    | Compose file for instance N      |
 | `~/.openclawN/`   | Persistent data for instance N   |
+
+## Command Reference
+
+| Command | Description |
+|---------|-------------|
+| `openclaw-new N\|N-M [--preset NAME]` | Create instance(s) |
+| `openclaw-delete N\|N-M` | Delete instance(s) |
+| `openclaw-onboard N` | Run onboarding wizard |
+| `openclaw-preset [list\|show\|create]` | Manage config presets |
+| `openclaw-update N` | Update instance to latest image |
+| `openclaw-exec N [cmd...]` | Run command in container |
+| `openclawN [cmd...]` | Shortcut for openclaw-exec |
+| `openclaw-remote N` | Enable Tailscale remote access |
+| `openclaw-logs N` | Follow container logs |
+| `openclaw-health N` | Health check |
+| `openclaw-list` | List all instances with ports |
+| `openclaw-help` | Full command reference |
+
+Run `openclaw-help` for detailed usage of every command.
 
 ## Notes
 
