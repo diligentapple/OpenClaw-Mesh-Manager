@@ -25,6 +25,7 @@ services:
         "${OPENCLAW_GATEWAY_BIND:-loopback}",
         "--port",
         "18789",
+        "--allow-unconfigured",
       ]
     healthcheck:
       test:
