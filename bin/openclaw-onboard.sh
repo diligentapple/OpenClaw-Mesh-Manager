@@ -15,29 +15,32 @@ if [[ ! -d "$DATA_DIR" ]]; then
   exit 1
 fi
 
-if ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
-  echo "Error: container '$CONTAINER' is not running."
-  echo "Use 'openclaw-list' to see running instances."
+# Verify the container exists (running, restarting, or any state)
+if ! docker inspect "$CONTAINER" >/dev/null 2>&1; then
+  echo "Error: container '$CONTAINER' does not exist."
+  echo "Use 'openclaw-new $N' to create it, or 'openclaw-list' to see instances."
   exit 1
 fi
 
-# Wait for a restarting container to settle (up to ~30 s)
+# Wait until the container is in "running" state.
+# On a fresh instance the gateway may crash-loop (no config yet) so we need to
+# catch it during the brief window between restarts when it is "running".
+echo "Running onboarding for instance #$N..."
 status=$(docker inspect --format '{{.State.Status}}' "$CONTAINER" 2>/dev/null || true)
-if [[ "$status" == "restarting" ]]; then
-  echo "Container '$CONTAINER' is restarting – waiting for it to become healthy..."
-  for i in $(seq 1 15); do
-    sleep 2
+if [[ "$status" != "running" ]]; then
+  echo "Container is $status – waiting for it to start..."
+  for i in $(seq 1 30); do
+    sleep 1
     status=$(docker inspect --format '{{.State.Status}}' "$CONTAINER" 2>/dev/null || true)
     [[ "$status" == "running" ]] && break
   done
   if [[ "$status" != "running" ]]; then
-    echo "Error: container '$CONTAINER' is still not running (status: $status)."
+    echo "Error: container '$CONTAINER' did not reach running state (status: $status)."
     echo "Check logs with: docker logs $CONTAINER"
     exit 1
   fi
 fi
 
-echo "Running onboarding for instance #$N..."
 docker exec -it "$CONTAINER" node dist/index.js onboard --mode local
 
 # Always enable insecure auth so HTTP fallback URLs work without HTTPS
