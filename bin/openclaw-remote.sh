@@ -52,49 +52,6 @@ restore_ownership() {
   fi
 }
 
-# Find pending.json and paired.json in the data directory.
-# OpenClaw stores these in subdirectories (nodes/ or devices/) depending on version.
-find_device_files() {
-  PENDING_FILE=""
-  PAIRED_FILE=""
-  DEVICES_DIR=""
-
-  # Search known subdirectory locations
-  local candidate
-  for candidate in \
-    "${DATA_DIR}/nodes" \
-    "${DATA_DIR}/devices" \
-    "${DATA_DIR}"; do
-    if [[ -f "${candidate}/pending.json" ]] || [[ -f "${candidate}/paired.json" ]]; then
-      DEVICES_DIR="$candidate"
-      break
-    fi
-  done
-
-  # If no files found yet, search recursively for pending.json
-  if [[ -z "$DEVICES_DIR" ]]; then
-    local found
-    found=$(sudo find "$DATA_DIR" -name "pending.json" -type f 2>/dev/null | head -1)
-    if [[ -n "$found" ]]; then
-      DEVICES_DIR=$(dirname "$found")
-    fi
-  fi
-
-  # Still nothing -- try paired.json
-  if [[ -z "$DEVICES_DIR" ]]; then
-    local found
-    found=$(sudo find "$DATA_DIR" -name "paired.json" -type f 2>/dev/null | head -1)
-    if [[ -n "$found" ]]; then
-      DEVICES_DIR=$(dirname "$found")
-    fi
-  fi
-
-  if [[ -n "$DEVICES_DIR" ]]; then
-    PENDING_FILE="${DEVICES_DIR}/pending.json"
-    PAIRED_FILE="${DEVICES_DIR}/paired.json"
-  fi
-}
-
 # ---------------------------------------------------------------------------
 # Parse arguments
 # ---------------------------------------------------------------------------
