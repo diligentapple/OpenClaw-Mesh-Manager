@@ -21,6 +21,22 @@ if ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
   exit 1
 fi
 
+# Wait for a restarting container to settle (up to ~30 s)
+status=$(docker inspect --format '{{.State.Status}}' "$CONTAINER" 2>/dev/null || true)
+if [[ "$status" == "restarting" ]]; then
+  echo "Container '$CONTAINER' is restarting – waiting for it to become healthy..."
+  for i in $(seq 1 15); do
+    sleep 2
+    status=$(docker inspect --format '{{.State.Status}}' "$CONTAINER" 2>/dev/null || true)
+    [[ "$status" == "running" ]] && break
+  done
+  if [[ "$status" != "running" ]]; then
+    echo "Error: container '$CONTAINER' is still not running (status: $status)."
+    echo "Check logs with: docker logs $CONTAINER"
+    exit 1
+  fi
+fi
+
 echo "Running onboarding for instance #$N..."
 docker exec -it "$CONTAINER" node dist/index.js onboard --mode local
 
