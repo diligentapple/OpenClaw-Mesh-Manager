@@ -30,9 +30,6 @@ else
 fi
 
 CONTAINER="openclaw${N}-gateway"
-HOME_DIR="${HOME:-/root}"
-INSTANCE_DIR="${HOME_DIR}/openclaw${N}"
-COMPOSE_FILE="${INSTANCE_DIR}/docker-compose.yml"
 
 if ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
   echo "Error: container '$CONTAINER' is not running."
@@ -49,15 +46,6 @@ else
   if docker exec "$CONTAINER" which "$1" >/dev/null 2>&1; then
     exec docker exec "$CONTAINER" "$@"
   else
-    # Use compose run with the cli service if compose file exists
-    if [[ -f "$COMPOSE_FILE" ]]; then
-      COMPOSE_BIN="docker compose"
-      if ! docker compose version >/dev/null 2>&1; then
-        COMPOSE_BIN="docker-compose"
-      fi
-      exec $COMPOSE_BIN -f "$COMPOSE_FILE" run --rm openclaw-cli "$@"
-    else
-      exec docker exec "$CONTAINER" node dist/index.js "$@"
-    fi
+    exec docker exec "$CONTAINER" node dist/index.js "$@"
   fi
 fi
