@@ -28,7 +28,9 @@ INSTANCE LIFECYCLE
       Must be run after openclaw-new (not needed if --preset was used).
 
   openclaw-update N
-      Pull the latest OpenClaw Docker image and recreate instance #N.
+      Update instance #N to the latest OpenClaw Docker image.
+      Steps: backs up config, pulls latest image, recreates container,
+      runs config migration (doctor), restarts gateway, verifies health.
 
   openclaw-delete N|N-M
       Delete instance(s) (container, compose file, and data directory).

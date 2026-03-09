@@ -160,11 +160,13 @@ The longer form also works:
 openclaw-exec 1 node --version
 ```
 
-### Update an instance (pull latest image and recreate)
+### Update an instance
 
 ```bash
 openclaw-update N
 ```
+
+This backs up your config, pulls the latest Docker image, recreates the container, runs config migration (`doctor`), restarts the gateway, and verifies health. If the health check fails, check logs with `openclaw-logs N --tail 20`.
 
 ### List running instances
 
@@ -217,7 +219,7 @@ Each instance N gets deterministic ports:
 | `openclaw-delete N\|N-M` | Delete instance(s) |
 | `openclaw-onboard N` | Run onboarding wizard |
 | `openclaw-preset [list\|show\|create]` | Manage config presets |
-| `openclaw-update N` | Update instance to latest image |
+| `openclaw-update N` | Update instance (backup, pull, migrate, verify) |
 | `openclaw-exec N [cmd...]` | Run command in container |
 | `openclawN [cmd...]` | Shortcut for openclaw-exec |
 | `openclaw-remote N` | Enable Tailscale remote access |
