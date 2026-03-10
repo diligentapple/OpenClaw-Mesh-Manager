@@ -182,10 +182,12 @@ get_tailscale_info() {
   TS_IP=""
 
   local ts_json
-  ts_json=$(tailscale status --json 2>/dev/null)
+  ts_json=$(tailscale status --json 2>/dev/null || true)
 
-  local dns_name
-  dns_name=$(echo "$ts_json" | jq -r '.Self.DNSName // ""' | sed 's/\.$//')
+  local dns_name=""
+  if [[ -n "$ts_json" ]]; then
+    dns_name=$(echo "$ts_json" | jq -r '.Self.DNSName // ""' 2>/dev/null | sed 's/\.$//' || true)
+  fi
 
   TS_IP=$(tailscale ip -4 2>/dev/null || echo "")
 
@@ -597,7 +599,7 @@ print_status() {
 
   echo "Tailscale:"
   local ts_hostname ts_ip
-  ts_hostname=$(tailscale status --json 2>/dev/null | jq -r '.Self.DNSName // ""' | sed 's/\.$//')
+  ts_hostname=$(tailscale status --json 2>/dev/null | jq -r '.Self.DNSName // ""' 2>/dev/null | sed 's/\.$//' || true)
   ts_ip=$(tailscale ip -4 2>/dev/null || echo "unknown")
   echo "  Hostname              : ${ts_hostname:-unknown}"
   echo "  IPv4                  : $ts_ip"
