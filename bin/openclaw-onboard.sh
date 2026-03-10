@@ -34,6 +34,8 @@ echo "Running onboarding for instance #$N..."
 docker run --rm -it \
   -e HOME=/home/node \
   -e TERM=xterm-256color \
+  -e NPM_CONFIG_PREFIX=/home/node/.npm-global \
+  -e PATH=/home/node/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   -v "${DATA_DIR}:/home/node/.openclaw" \
   "$IMAGE" \
   node dist/index.js onboard --mode local
