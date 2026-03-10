@@ -52,6 +52,29 @@ restore_ownership() {
   fi
 }
 
+# Resolve the gateway token: try openclaw.json first, fall back to the .env
+# file that openclaw-new generates (the onboarding wizard may not write the
+# token into the JSON config).
+resolve_token() {
+  local n="$1"
+  local token=""
+
+  # Try the JSON config
+  if [[ -f "$CONFIG" ]]; then
+    token=$(sudo jq -r '.gateway.auth.token // empty' "$CONFIG" 2>/dev/null || true)
+  fi
+
+  # Fallback: .env file created by openclaw-new
+  if [[ -z "$token" ]]; then
+    local env_file="${HOME_DIR}/openclaw${n}/.env"
+    if [[ -f "$env_file" ]]; then
+      token=$(grep -oP '^OPENCLAW_GATEWAY_TOKEN=\K.*' "$env_file" 2>/dev/null || true)
+    fi
+  fi
+
+  echo "$token"
+}
+
 # ---------------------------------------------------------------------------
 # Parse arguments
 # ---------------------------------------------------------------------------
@@ -208,11 +231,29 @@ edit_config_enable() {
   tmp=$(mktemp)
   trap 'rm -f "$tmp"' EXIT
 
-  sudo jq --argjson origins "$origins_json" '
-    .gateway.bind = "lan" |
-    .gateway.controlUi.allowedOrigins = $origins |
-    .gateway.controlUi.allowInsecureAuth = true
-  ' "$config" > "$tmp"
+  # If the token is missing from the config (onboarding may not write it),
+  # pull it from the .env file so the config is self-contained.
+  local cfg_token
+  cfg_token=$(sudo jq -r '.gateway.auth.token // empty' "$config" 2>/dev/null || true)
+  if [[ -z "$cfg_token" ]]; then
+    cfg_token=$(resolve_token "$N")
+  fi
+
+  if [[ -n "$cfg_token" ]]; then
+    sudo jq --argjson origins "$origins_json" --arg tok "$cfg_token" '
+      .gateway.bind = "lan" |
+      .gateway.controlUi.allowedOrigins = $origins |
+      .gateway.controlUi.allowInsecureAuth = true |
+      .gateway.auth.mode = "token" |
+      .gateway.auth.token = $tok
+    ' "$config" > "$tmp"
+  else
+    sudo jq --argjson origins "$origins_json" '
+      .gateway.bind = "lan" |
+      .gateway.controlUi.allowedOrigins = $origins |
+      .gateway.controlUi.allowInsecureAuth = true
+    ' "$config" > "$tmp"
+  fi
 
   if ! jq empty "$tmp" 2>/dev/null; then
     echo "Error: JSON validation failed after editing. Config unchanged."
@@ -223,6 +264,14 @@ edit_config_enable() {
   sudo mv "$tmp" "$config"
   restore_ownership "$config" "$owner"
   trap - EXIT
+
+  # The container command uses --bind ${OPENCLAW_GATEWAY_BIND:-loopback} from
+  # the .env file.  If we don't update .env the CLI flag overrides the JSON
+  # config and the gateway stays in loopback mode.
+  local env_file="${HOME_DIR}/openclaw${N}/.env"
+  if [[ -f "$env_file" ]]; then
+    sed -i 's/^OPENCLAW_GATEWAY_BIND=.*/OPENCLAW_GATEWAY_BIND=lan/' "$env_file"
+  fi
 
   echo "Config updated."
 }
@@ -257,6 +306,12 @@ edit_config_disable() {
   sudo mv "$tmp" "$config"
   restore_ownership "$config" "$owner"
   trap - EXIT
+
+  # Revert .env so the container command matches the JSON config
+  local env_file="${HOME_DIR}/openclaw${N}/.env"
+  if [[ -f "$env_file" ]]; then
+    sed -i 's/^OPENCLAW_GATEWAY_BIND=.*/OPENCLAW_GATEWAY_BIND=loopback/' "$env_file"
+  fi
 
   echo "Config updated: gateway.bind=loopback, remote access origins removed."
 }
@@ -598,11 +653,11 @@ print_status() {
 
 print_summary() {
   local gateway_token
-  gateway_token=$(sudo jq -r '.gateway.auth.token // "not set"' "$CONFIG" 2>/dev/null)
+  gateway_token=$(resolve_token "$N")
 
   # Build URLs with token auto-fill when available
   local token_param=""
-  if [[ "$gateway_token" != "not set" && -n "$gateway_token" ]]; then
+  if [[ -n "$gateway_token" ]]; then
     token_param="?token=${gateway_token}"
   fi
 

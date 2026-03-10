@@ -46,6 +46,13 @@ docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E '^openclaw[0-9]+-gatewa
   if [[ -f "$config" && -n "$api_port" ]]; then
     bind_val=$(sudo jq -r '.gateway.bind // "loopback"' "$config" 2>/dev/null || echo "loopback")
     token=$(sudo jq -r '.gateway.auth.token // empty' "$config" 2>/dev/null || echo "")
+    # Fallback: .env file (onboarding may not write token to the JSON config)
+    if [[ -z "$token" ]]; then
+      local env_file="${HOME_DIR}/openclaw${n}/.env"
+      if [[ -f "$env_file" ]]; then
+        token=$(grep -oP '^OPENCLAW_GATEWAY_TOKEN=\K.*' "$env_file" 2>/dev/null || echo "")
+      fi
+    fi
     token_param=""
     if [[ -n "$token" ]]; then
       token_param="?token=${token}"
