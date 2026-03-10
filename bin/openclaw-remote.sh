@@ -476,7 +476,11 @@ restart_and_wait() {
   # container so it picks up changes to OPENCLAW_GATEWAY_BIND and other vars.
   local compose_dir="${HOME_DIR}/openclaw${N}"
   if [[ -f "${compose_dir}/docker-compose.yml" ]]; then
-    docker compose -f "${compose_dir}/docker-compose.yml" up -d --force-recreate >/dev/null 2>&1
+    # --project-directory ensures docker compose reads .env from the compose
+    # dir, not the caller's cwd.
+    docker compose --project-directory "$compose_dir" \
+      -f "${compose_dir}/docker-compose.yml" up -d --force-recreate 2>&1 \
+      | grep -v "^$" || true
   else
     # Fallback for non-standard setups
     docker restart "$CONTAINER" >/dev/null
