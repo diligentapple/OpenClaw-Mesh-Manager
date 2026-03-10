@@ -48,7 +48,7 @@ docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E '^openclaw[0-9]+-gatewa
     # .env token is authoritative (it's passed to the container as an env var).
     # Fall back to the JSON config if .env is missing.
     token=""
-    local env_file="${HOME_DIR}/openclaw${n}/.env"
+    env_file="${HOME_DIR}/openclaw${n}/.env"
     if [[ -f "$env_file" ]]; then
       token=$(grep -oP '^OPENCLAW_GATEWAY_TOKEN=\K.*' "$env_file" 2>/dev/null || echo "")
     fi
