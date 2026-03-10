@@ -245,7 +245,8 @@ edit_config_enable() {
       .gateway.controlUi.allowedOrigins = $origins |
       .gateway.controlUi.allowInsecureAuth = true |
       .gateway.auth.mode = "token" |
-      .gateway.auth.token = $tok
+      .gateway.auth.token = $tok |
+      .gateway.remote.token = $tok
     ' "$config" > "$tmp"
   else
     sudo jq --argjson origins "$origins_json" '
@@ -293,7 +294,8 @@ edit_config_disable() {
 
   sudo jq '
     .gateway.bind = "loopback" |
-    del(.gateway.controlUi.allowedOrigins)
+    del(.gateway.controlUi.allowedOrigins) |
+    del(.gateway.remote.token)
   ' "$config" > "$tmp"
 
   if ! jq empty "$tmp" 2>/dev/null; then
