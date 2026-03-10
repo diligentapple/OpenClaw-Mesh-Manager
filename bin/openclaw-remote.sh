@@ -474,7 +474,16 @@ stop_tailscale_serve() {
 # ---------------------------------------------------------------------------
 
 restart_and_wait() {
-  docker restart "$CONTAINER" >/dev/null
+  # IMPORTANT: docker restart does NOT re-read .env — env vars are baked in at
+  # container creation.  We must use "docker compose up -d" to recreate the
+  # container so it picks up changes to OPENCLAW_GATEWAY_BIND and other vars.
+  local compose_dir="${HOME_DIR}/openclaw${N}"
+  if [[ -f "${compose_dir}/docker-compose.yml" ]]; then
+    docker compose -f "${compose_dir}/docker-compose.yml" up -d --force-recreate >/dev/null 2>&1
+  else
+    # Fallback for non-standard setups
+    docker restart "$CONTAINER" >/dev/null
+  fi
 
   local i
   for i in $(seq 1 10); do
