@@ -34,7 +34,7 @@ if [[ -n "${SUDO_USER:-}" ]] && ! id -nG "$SUDO_USER" 2>/dev/null | grep -qw doc
   echo "Added $SUDO_USER to the docker group. Log out and back in (or run 'newgrp docker') for this to take effect."
 fi
 
-mkdir -p "$BIN_DIR" "$SHARE_DIR/templates" "$SHARE_DIR/presets"
+mkdir -p "$BIN_DIR" "$SHARE_DIR/templates" "$SHARE_DIR/presets" "$SHARE_DIR/bridge"
 
 install -m 0755 "${REPO_DIR}/bin/openclaw-new.sh"    "${BIN_DIR}/openclaw-new"
 install -m 0755 "${REPO_DIR}/bin/openclaw-delete.sh" "${BIN_DIR}/openclaw-delete"
@@ -48,8 +48,10 @@ install -m 0755 "${REPO_DIR}/bin/openclaw-health.sh"  "${BIN_DIR}/openclaw-healt
 install -m 0755 "${REPO_DIR}/bin/openclaw-help.sh"    "${BIN_DIR}/openclaw-help"
 install -m 0755 "${REPO_DIR}/bin/openclaw-preset.sh"  "${BIN_DIR}/openclaw-preset"
 install -m 0755 "${REPO_DIR}/bin/openclaw-watchdog.sh" "${BIN_DIR}/openclaw-watchdog"
+install -m 0755 "${REPO_DIR}/bin/openclaw-mesh.sh"     "${BIN_DIR}/openclaw-mesh"
 
 install -m 0644 "${REPO_DIR}/templates/docker-compose.yml.tmpl" "${SHARE_DIR}/templates/docker-compose.yml.tmpl"
+install -m 0644 "${REPO_DIR}/bridge/bridge.js" "${SHARE_DIR}/bridge/bridge.js"
 
 # Install preset files
 for preset in "${REPO_DIR}/presets/"*.json; do
@@ -89,6 +91,7 @@ echo "  openclaw-remote N                    Remote access (Tailscale)"
 echo "  openclaw-logs N                      Follow container logs"
 echo "  openclaw-health N                    Health check"
 echo "  openclaw-watchdog N|all              Monitor & auto-restart frozen gateways"
+echo "  openclaw-mesh start|stop|status      Mesh network for inter-instance comms"
 echo "  openclaw-list                        List all instances"
 echo "  openclaw-help                        Full command reference"
 echo ""

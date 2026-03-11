@@ -243,6 +243,9 @@ apply_preset() {
     sed -i 's/^OPENCLAW_GATEWAY_BIND=.*/OPENCLAW_GATEWAY_BIND=lan/' "${instance_dir}/.env"
   fi
 
+  # Ensure the shared mesh network exists (idempotent)
+  docker network create openclaw-net 2>/dev/null || true
+
   # Restart to pick up new config
   local container="openclaw${n}-gateway"
   $COMPOSE_BIN -f "${instance_dir}/docker-compose.yml" up -d --force-recreate >/dev/null 2>&1 || true
@@ -310,6 +313,9 @@ OPENCLAW_GATEWAY_TOKEN=${gw_token}
 OPENCLAW_GATEWAY_BIND=loopback
 ENVEOF
 
+  # Ensure the shared mesh network exists (idempotent)
+  docker network create openclaw-net 2>/dev/null || true
+
   echo "Bringing up instance #$N..."
   $COMPOSE_BIN -f "${INSTANCE_DIR}/docker-compose.yml" up -d
 
@@ -333,6 +339,17 @@ ENVEOF
   echo "Data      : $DATA_DIR"
   echo "API Port  : $API_PORT"
   echo "WS Port   : $WS_PORT"
+
+  # Auto-refresh the mesh if it's running so the new instance is discovered
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx openclaw-bridge; then
+    echo ""
+    echo "Mesh network detected — refreshing..."
+    local MESH_CMD
+    MESH_CMD="$(command -v openclaw-mesh 2>/dev/null || echo "/usr/local/bin/openclaw-mesh")"
+    if [[ -x "$MESH_CMD" ]]; then
+      "$MESH_CMD" refresh
+    fi
+  fi
 }
 
 # ---------------------------------------------------------------------------

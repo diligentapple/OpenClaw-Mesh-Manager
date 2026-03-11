@@ -225,6 +225,7 @@ Each instance N gets deterministic ports:
 | `openclaw-logs N` | Follow container logs |
 | `openclaw-health N` | Health check |
 | `openclaw-list` | List all instances with ports |
+| `openclaw-mesh start\|stop\|status\|refresh` | Manage inter-instance mesh network |
 | `openclaw-help` | Full command reference |
 
 Run `openclaw-help` for detailed usage of every command.
@@ -235,6 +236,7 @@ Run `openclaw-help` for detailed usage of every command.
 - Each instance runs a gateway container and can launch a CLI container on-demand
 - 1 instance = 1 gateway container
 - Instances don't interfere with each other
+- Instances can communicate via the mesh network (`openclaw-mesh start`)
 - Safe to run many on one VPS
 - Creating an instance with a number that already exists is blocked -- you must delete first
 - `openclaw-new N` without `--pull` uses the locally cached image if one exists; use `openclaw-new --pull N` to ensure you get the latest version
@@ -296,6 +298,151 @@ The firewall auto-configuration handles ufw, firewalld, iptables, and nftables. 
 - **HTTPS not working** -- Enable MagicDNS at https://login.tailscale.com/admin/dns; certificates may take up to 30 seconds on first use
 - **Dashboard rejects connection** -- Check `openclaw-remote N --status` to verify `gateway.bind` is `lan` and origins are set
 - **"pairing required"** -- Run `openclaw-remote N --approve`
+
+## Mesh Networking (Inter-Instance Communication)
+
+Let your OpenClaw instances talk to each other — including through Telegram. The mesh creates a shared Docker network and runs a lightweight bridge container that translates HTTP requests from agents into WebSocket messages to other instance gateways.
+
+### How it works
+
+```
+Telegram user → Instance 1 agent
+  ↓ (agent runs curl via exec tool)
+  http://openclaw-bridge:3000/send  →  Instance 2 gateway (WebSocket)
+  ↓                                          ↓
+  Instance 2 agent processes and responds
+  ↓
+  Bridge returns response as HTTP body
+  ↓
+Instance 1 agent receives response → replies to Telegram user
+```
+
+The `/relay` endpoint goes further: it sends your message to Instance B, waits for the response, and automatically injects it back into your Telegram conversation on Instance A via `chat.inject`.
+
+### Quick start
+
+```bash
+# 1. Start the mesh (creates network, discovers instances, launches bridge)
+openclaw-mesh start
+
+# 2. From any instance's agent, talk to another instance:
+curl -s -X POST http://openclaw-bridge:3000/send \
+  -H 'Content-Type: application/json' \
+  -d '{"to": 2, "message": "What are you working on?"}'
+```
+
+The agent uses its built-in `exec` tool to run `curl` commands against the bridge. No extra configuration is needed inside the container — the bridge is reachable at `http://openclaw-bridge:3000` on the shared Docker network.
+
+### Bridge API endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/health` | Bridge health check |
+| `GET` | `/instances` | List registered instances and connection status |
+| `POST` | `/send` | Send a message to an instance, wait for the agent's response |
+| `POST` | `/inject` | Inject an assistant message into a session (broadcasts to Telegram) |
+| `POST` | `/relay` | Send to instance B, inject response back into instance A's session |
+
+#### POST /send
+
+```json
+{
+  "to": 2,
+  "message": "Summarize your recent activity",
+  "sessionKey": "main"
+}
+```
+
+`sessionKey` is optional (defaults to `"main"`). Returns the agent's response text.
+
+#### POST /inject
+
+```json
+{
+  "instance": 1,
+  "sessionKey": "agent:main:telegram:direct:123456789",
+  "message": "Here's the report from Instance 2: ...",
+  "label": "mesh-relay"
+}
+```
+
+Injects a message into the specified session. If the session is a Telegram session, the message is delivered to the Telegram chat.
+
+#### POST /relay
+
+```json
+{
+  "from": 1,
+  "fromSessionKey": "agent:main:telegram:direct:123456789",
+  "to": 2,
+  "message": "Generate a status report",
+  "toSessionKey": "main"
+}
+```
+
+Combines `/send` + `/inject`: sends the message to instance 2, waits for the response, then injects it into instance 1's Telegram session.
+
+### Telegram integration
+
+The mesh works seamlessly with Telegram sessions:
+
+1. A Telegram user sends a message to Instance 1's bot
+2. Instance 1's agent decides it needs input from Instance 2
+3. The agent runs `curl http://openclaw-bridge:3000/send -d '{"to":2,"message":"..."}'` via its `exec` tool
+4. The bridge connects to Instance 2's gateway over WebSocket, sends the message, and waits for the response
+5. The response is returned to Instance 1's agent, which incorporates it into its reply to the Telegram user
+
+For automatic relay (the response appears directly in Telegram without the agent needing to forward it), use the `/relay` endpoint with the Telegram session key (`agent:main:telegram:direct:{telegram_user_id}`).
+
+### Management commands
+
+```bash
+openclaw-mesh start     # Create network, discover instances, launch bridge, announce roster
+openclaw-mesh stop      # Stop bridge, remove network if empty
+openclaw-mesh status    # Show network, bridge, and connection status
+openclaw-mesh refresh   # Re-discover instances, restart bridge, re-announce roster
+```
+
+New instances are **automatically discovered**: when you run `openclaw-new` while the mesh is running, it triggers `openclaw-mesh refresh` behind the scenes — the new instance is added to the config, connected to the network, and all instances receive an updated roster announcement.
+
+### Instance discovery & announcements
+
+When the mesh starts (or refreshes), every instance receives an **announcement message** injected into its `main` session listing all network members:
+
+```
+[OpenClaw Mesh Network] Connected instances:
+  • Instance 1 (Coding Agent) — Handles programming tasks
+  • Instance 2 (Research Agent) — Specializes in web research
+  • Instance 3 (Ops Agent) — Infrastructure and DevOps
+
+To message another instance: curl -s -X POST http://openclaw-bridge:3000/send ...
+To see all instances: curl -s http://openclaw-bridge:3000/instances
+```
+
+This way each agent **knows who else is on the network** and what they do.
+
+#### Instance metadata
+
+Give each instance a name and description by creating a `.mesh-meta` file:
+
+```bash
+echo -e "Research Agent\nSpecializes in web research and summarization" \
+  > ~/.openclaw2/.mesh-meta
+```
+
+Line 1 = name, Line 2 = description. These appear in:
+- The roster announcement sent to all instances
+- The `GET /instances` API response
+
+Instances without a `.mesh-meta` file default to "Instance N" with no description.
+
+### Architecture
+
+- **Docker network** (`openclaw-net`): A shared external network connecting all instance containers and the bridge
+- **Bridge container** (`openclaw-bridge`): Runs the same OpenClaw Docker image with a custom entrypoint (`bridge.js`). Uses the `ws` module already present in the image.
+- **Config**: Auto-generated at `~/.openclaw-mesh/config.json` from instance tokens and metadata
+- **No host ports exposed**: The bridge listens only on the Docker network (port 3000). Agents reach it by container name.
+- **Roster announcements**: On start/refresh, the bridge injects a member list into each instance's main session so every agent knows the full topology
 
 ## Firewall / Reverse Proxy
 

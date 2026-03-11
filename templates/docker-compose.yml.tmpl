@@ -30,6 +30,9 @@ services:
         "18789",
         "--allow-unconfigured",
       ]
+    networks:
+      - default
+      - openclaw-net
     healthcheck:
       test:
         [
@@ -42,3 +45,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+
+networks:
+  openclaw-net:
+    external: true
+    name: openclaw-net

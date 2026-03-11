@@ -117,6 +117,55 @@ PRESETS
     default   Loopback binding, insecure auth enabled
     remote    LAN binding, insecure auth enabled (for Tailscale)
 
+MESH NETWORKING
+---------------
+
+  openclaw-mesh start
+      Create a shared Docker network (openclaw-net), discover all
+      running instances, generate a bridge config, and start the
+      openclaw-bridge container.  After this, every instance agent
+      can reach the bridge at http://openclaw-bridge:3000.
+      On start, a roster announcement is injected into each
+      instance listing all network members.
+
+  openclaw-mesh stop
+      Stop the bridge container and remove the network (if empty).
+
+  openclaw-mesh status
+      Show network, bridge, and instance connectivity status.
+
+  openclaw-mesh refresh
+      Re-discover instances (e.g. after creating new ones),
+      regenerate the bridge config, restart the bridge, and
+      announce the updated roster to all instances.
+      This is called AUTOMATICALLY when openclaw-new creates
+      an instance while the mesh is running.
+
+  Instance metadata:
+      Each instance can have a name and description stored in
+        ~/.openclawN/.mesh-meta
+      Line 1 = name, Line 2 = description.  Example:
+        echo -e "Research Agent\\nSpecializes in web research" \\
+          > ~/.openclaw2/.mesh-meta
+      These are included in the roster announcement and the
+      /instances API response.
+
+  Bridge HTTP API (from inside any instance container):
+    GET  /health      Bridge health check
+    GET  /instances   List registered instances (with name/description)
+    POST /send        Send message, wait for agent response
+                      Body: {"to": N, "message": "...", "sessionKey": "..."}
+    POST /inject      Inject assistant message into a session
+                      Body: {"instance": N, "sessionKey": "...", "message": "..."}
+    POST /relay       Send to B, inject response into A's session
+                      Body: {"from": N, "fromSessionKey": "...",
+                             "to": M, "message": "...", "toSessionKey": "..."}
+
+  Example (from instance 1's agent via exec/curl):
+    curl -s -X POST http://openclaw-bridge:3000/send \
+      -H 'Content-Type: application/json' \
+      -d '{"to": 2, "message": "Summarize recent logs"}'
+
 HELP
 ----
 
