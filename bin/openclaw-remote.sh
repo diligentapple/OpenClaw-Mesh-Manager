@@ -495,7 +495,7 @@ restart_and_wait() {
   echo "Waiting for gateway to start..."
   local i
   for i in $(seq 1 30); do
-    if curl -sf -o /dev/null "http://127.0.0.1:${API_PORT}/healthz" 2>/dev/null; then
+    if curl -sf --max-time 3 -o /dev/null "http://127.0.0.1:${API_PORT}/healthz" 2>/dev/null; then
       echo "Gateway is up (port $API_PORT)."
       return 0
     fi
@@ -579,9 +579,6 @@ approve_devices() {
   else
     echo "Approved $approved device(s)."
   fi
-
-  # Restart to pick up changes
-  restart_and_wait
 }
 
 # ---------------------------------------------------------------------------
@@ -730,9 +727,7 @@ wait_and_approve() {
         fi
       done <<< "$request_ids"
 
-      echo "Approved $approved device(s)."
-      restart_and_wait
-      echo "Device paired. You can now use the dashboard."
+      echo "Approved $approved device(s). Device paired — dashboard is ready."
       return 0
     fi
 
