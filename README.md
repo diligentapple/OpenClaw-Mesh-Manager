@@ -15,18 +15,18 @@ Docker will be auto installed in this script (if not present on the machine).
 
 ## Install
 
+### Option A: One-liner (no git required)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/diligentapple/OpenClaw-Multi-Instance-Manager/main/bootstrap.sh | sudo bash
+```
+
 ### Option A: Clone and install
 
 ```bash
 git clone https://github.com/diligentapple/OpenClaw-Multi-Instance-Manager.git
 cd OpenClaw-Multi-Instance-Manager
 sudo bash install.sh
-```
-
-### Option B: One-liner (no git required)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/diligentapple/OpenClaw-Multi-Instance-Manager/main/bootstrap.sh | sudo bash
 ```
 
 ### After installing
