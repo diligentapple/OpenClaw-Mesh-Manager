@@ -58,10 +58,15 @@ else
   docker restart "$CONTAINER" >/dev/null 2>&1 || true
 fi
 
-# Wait for the container to come back up and respond
-API_PORT=$(docker port "$CONTAINER" 18789/tcp 2>/dev/null | head -1 | awk -F: '{print $NF}' || true)
+# Wait for the container to come back up and respond.
+# Re-query docker port each iteration because after force-recreate the
+# container needs a moment before port mappings are available.
+API_PORT=""
 for i in $(seq 1 20); do
   sleep 1
+  if [[ -z "$API_PORT" ]]; then
+    API_PORT=$(docker port "$CONTAINER" 18789/tcp 2>/dev/null | head -1 | awk -F: '{print $NF}' || true)
+  fi
   if [[ -n "${API_PORT:-}" ]] && curl -sf --max-time 3 "http://127.0.0.1:${API_PORT}/healthz" >/dev/null 2>&1; then
     echo "Gateway is up."
     break
