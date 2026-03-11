@@ -193,5 +193,5 @@ DIRECTORY LAYOUT
 MORE INFO
 ---------
 
-  https://github.com/diligentapple/OpenClaw-Multi-Instance-Manager
+  https://github.com/diligentapple/OpenClaw-Mesh-Manager
 EOF

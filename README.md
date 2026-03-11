@@ -1,5 +1,5 @@
-# OpenClaw Multi-Instance Manager
-Easily create, manage, and delete multiple [OpenClaw](https://github.com/openclaw/openclaw) Docker instances on a single machine with deterministic naming, ports, data directories, and convenient shortcut commands for quick container access.
+# OpenClaw Mesh Manager
+Create, manage, and network multiple [OpenClaw](https://github.com/openclaw/openclaw) Docker instances on a single machine — with cross-instance mesh communication, Telegram relay support, deterministic naming, ports, data directories, and convenient shortcut commands.
 
 ## Prerequisites
 
@@ -14,14 +14,14 @@ Docker will be auto installed in this script (if not present on the machine).
 ### Option A: One-liner (no git required)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/diligentapple/OpenClaw-Multi-Instance-Manager/main/bootstrap.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/diligentapple/OpenClaw-Mesh-Manager/main/bootstrap.sh | sudo bash
 ```
 
 ### Option B: Clone and install
 
 ```bash
-git clone https://github.com/diligentapple/OpenClaw-Multi-Instance-Manager.git
-cd OpenClaw-Multi-Instance-Manager
+git clone https://github.com/diligentapple/OpenClaw-Mesh-Manager.git
+cd OpenClaw-Mesh-Manager
 sudo bash install.sh
 ```
 

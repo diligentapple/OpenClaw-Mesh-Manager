@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_OWNER="diligentapple"
-REPO_NAME="OpenClaw-Multi-Instance-Manager"
+REPO_NAME="OpenClaw-Mesh-Manager"
 BRANCH="main"
 
 TMP="$(mktemp -d)"
