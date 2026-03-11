@@ -2,6 +2,7 @@ services:
   openclaw-gateway:
     image: ghcr.io/openclaw/openclaw:latest
     container_name: openclaw{{N}}-gateway
+    user: root
     restart: unless-stopped
     environment:
       HOME: /home/node
