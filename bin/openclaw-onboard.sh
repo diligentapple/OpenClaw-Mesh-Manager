@@ -59,7 +59,7 @@ else
 fi
 
 # Wait for the container to come back up and respond
-API_PORT=$(docker port "$CONTAINER" 18789/tcp 2>/dev/null | head -1 | cut -d: -f2 || true)
+API_PORT=$(docker port "$CONTAINER" 18789/tcp 2>/dev/null | head -1 | awk -F: '{print $NF}' || true)
 for i in $(seq 1 20); do
   sleep 1
   if [[ -n "${API_PORT:-}" ]] && curl -sf --max-time 3 "http://127.0.0.1:${API_PORT}/healthz" >/dev/null 2>&1; then

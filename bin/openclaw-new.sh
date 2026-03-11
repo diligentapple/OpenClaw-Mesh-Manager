@@ -71,9 +71,9 @@ RANGE_ARG=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --pull) PULL=true; shift ;;
-    --port) CUSTOM_PORT="${2:-}"; shift 2 ;;
+    --port) [[ $# -ge 2 ]] || { echo "Error: --port requires a value"; exit 1; }; CUSTOM_PORT="$2"; shift 2 ;;
     -o|--onboard) ONBOARD=true; shift ;;
-    --preset) PRESET="${2:-}"; shift 2 ;;
+    --preset) [[ $# -ge 2 ]] || { echo "Error: --preset requires a value"; exit 1; }; PRESET="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *)
       if [[ -z "$RANGE_ARG" ]]; then
@@ -214,16 +214,23 @@ apply_preset() {
   local timestamp
   timestamp=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
 
-  # Render preset template with instance-specific values
-  # Use | as delimiter for API_KEY since keys may contain /
+  # Render preset template with instance-specific values.
+  # API_KEY may contain sed metacharacters (|, &, \), so use awk for safe
+  # literal replacement of all placeholders.
   local tmp
   tmp=$(mktemp)
-  sed \
-    -e "s/{{API_PORT}}/${api_port}/g" \
-    -e "s/{{TOKEN}}/${token}/g" \
-    -e "s/{{TIMESTAMP}}/${timestamp}/g" \
-    -e "s|{{API_KEY}}|${API_KEY}|g" \
-    "$preset_file" > "$tmp"
+  awk \
+    -v api_port="$api_port" \
+    -v token="$token" \
+    -v timestamp="$timestamp" \
+    -v api_key="$API_KEY" \
+    '{
+      gsub(/\{\{API_PORT\}\}/, api_port)
+      gsub(/\{\{TOKEN\}\}/, token)
+      gsub(/\{\{TIMESTAMP\}\}/, timestamp)
+      gsub(/\{\{API_KEY\}\}/, api_key)
+      print
+    }' "$preset_file" > "$tmp"
 
   # Data dir is owned by uid 1000 (container node user), so use sudo
   sudo cp "$tmp" "$config"

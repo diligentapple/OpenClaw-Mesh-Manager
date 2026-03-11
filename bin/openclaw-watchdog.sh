@@ -97,7 +97,7 @@ check_instance() {
 
   # Get the most recent log line timestamp
   local last_log
-  last_log=$(docker logs "$container" --since "${THRESHOLD}m" 2>&1 | grep -E '^\d{4}-\d{2}-\d{2}T' | tail -1 || true)
+  last_log=$(docker logs "$container" --since "${THRESHOLD}m" 2>&1 | grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2}T' | tail -1 || true)
 
   if [[ -n "$last_log" ]]; then
     # Container has recent log output — it's alive
@@ -106,7 +106,7 @@ check_instance() {
 
   # No log output in THRESHOLD minutes — check if healthz actually responds in time
   local api_port
-  api_port=$(docker port "$container" 18789/tcp 2>/dev/null | head -1 | cut -d: -f2 || true)
+  api_port=$(docker port "$container" 18789/tcp 2>/dev/null | head -1 | awk -F: '{print $NF}' || true)
   if [[ -n "$api_port" ]]; then
     # Use a tight 3-second timeout to detect frozen event loops
     if curl -sf --max-time 3 "http://127.0.0.1:${api_port}/healthz" >/dev/null 2>&1; then

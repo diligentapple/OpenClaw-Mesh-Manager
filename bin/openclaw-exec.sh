@@ -43,7 +43,7 @@ else
   # If the first argument is a system binary (bash, node, cat, …)
   # run it directly.  Otherwise treat it as an OpenClaw CLI subcommand
   # and route through the app entrypoint.
-  if docker exec "$CONTAINER" which "$1" >/dev/null 2>&1; then
+  if docker exec "$CONTAINER" sh -c "command -v \"$1\"" >/dev/null 2>&1; then
     exec docker exec "$CONTAINER" "$@"
   else
     exec docker exec "$CONTAINER" node /app/dist/index.js "$@"

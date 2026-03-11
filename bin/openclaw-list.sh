@@ -16,8 +16,8 @@ while read -r name; do
 
   # Get host ports: try docker port (running), then docker inspect (any state),
   # then fall back to docker-compose.yml
-  api_port=$(docker port "$name" 18789/tcp 2>/dev/null | head -1 | cut -d: -f2 || true)
-  ws_port=$(docker port "$name" 18790/tcp 2>/dev/null | head -1 | cut -d: -f2 || true)
+  api_port=$(docker port "$name" 18789/tcp 2>/dev/null | head -1 | awk -F: '{print $NF}' || true)
+  ws_port=$(docker port "$name" 18790/tcp 2>/dev/null | head -1 | awk -F: '{print $NF}' || true)
 
   # Fallback: docker inspect reads port config even when stopped
   if [[ -z "$api_port" ]]; then

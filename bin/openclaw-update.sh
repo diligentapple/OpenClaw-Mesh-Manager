@@ -53,7 +53,7 @@ if docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
 
   # 7. Verify health
   sleep 3
-  API_PORT=$(docker port "$CONTAINER" 18789/tcp 2>/dev/null | head -1 | cut -d: -f2 || true)
+  API_PORT=$(docker port "$CONTAINER" 18789/tcp 2>/dev/null | head -1 | awk -F: '{print $NF}' || true)
   if [[ -n "$API_PORT" ]] && curl -sf "http://127.0.0.1:${API_PORT}/healthz" >/dev/null 2>&1; then
     echo "Instance #$N updated and healthy."
   else

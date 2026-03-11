@@ -47,6 +47,13 @@ show_preset() {
 }
 
 create_preset() {
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "Error: jq is required for preset creation. Install it:"
+    echo "  sudo apt-get install jq   (Debian/Ubuntu)"
+    echo "  sudo yum install jq       (RHEL/CentOS)"
+    exit 1
+  fi
+
   echo "Create a new OpenClaw preset"
   echo "============================"
   echo ""

@@ -15,7 +15,7 @@ if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER"; then
 fi
 
 # Determine host port for the gateway API
-API_PORT=$(docker port "$CONTAINER" 18789/tcp 2>/dev/null | head -1 | cut -d: -f2 || true)
+API_PORT=$(docker port "$CONTAINER" 18789/tcp 2>/dev/null | head -1 | awk -F: '{print $NF}' || true)
 if [[ -z "${API_PORT:-}" ]]; then
   API_PORT=$(docker inspect "$CONTAINER" \
     --format '{{range $p, $conf := .NetworkSettings.Ports}}{{if eq $p "18789/tcp"}}{{(index $conf 0).HostPort}}{{end}}{{end}}' 2>/dev/null || echo "")

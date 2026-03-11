@@ -72,7 +72,7 @@ delete_instance() {
 
   # Clean up tailscale serve for this instance's API port
   if command -v tailscale >/dev/null 2>&1; then
-    API_PORT=$(docker port "$CONTAINER" 18789/tcp 2>/dev/null | head -1 | cut -d: -f2 || echo "")
+    API_PORT=$(docker port "$CONTAINER" 18789/tcp 2>/dev/null | head -1 | awk -F: '{print $NF}' || echo "")
     if [[ -z "${API_PORT:-}" ]]; then
       API_PORT=$(grep -oP '"\K[0-9]+(?=:18789")' "${INSTANCE_DIR}/docker-compose.yml" 2>/dev/null || echo "")
     fi
@@ -89,10 +89,13 @@ delete_instance() {
   fi
 
   # Data dir may contain files owned by UID 1000 (container's node user).
+  # Try docker first (handles uid 1000 files), fall back to sudo rm.
   if [[ -d "$DATA_DIR" ]]; then
-    docker run --rm --user root --entrypoint sh -v "${DATA_DIR}:/cleanup" ghcr.io/openclaw/openclaw:latest -c 'rm -rf /cleanup/*'
+    docker run --rm --user root --entrypoint sh -v "${DATA_DIR}:/cleanup" ghcr.io/openclaw/openclaw:latest -c 'rm -rf /cleanup/*' 2>/dev/null \
+      || sudo rm -rf "${DATA_DIR:?}"/* 2>/dev/null || true
   fi
-  rm -rf "${DATA_DIR}" "${INSTANCE_DIR}"
+  rm -rf "${DATA_DIR}" "${INSTANCE_DIR}" 2>/dev/null \
+    || sudo rm -rf "${DATA_DIR}" "${INSTANCE_DIR}" 2>/dev/null || true
 
   # Remove shortcut symlink if it exists
   SHORTCUT="/usr/local/bin/openclaw${N}"
