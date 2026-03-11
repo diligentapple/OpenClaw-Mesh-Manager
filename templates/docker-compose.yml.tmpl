@@ -32,7 +32,7 @@ services:
       ]
     networks:
       - default
-      - openclaw-net
+      - {{MESH_NETWORK}}
     healthcheck:
       test:
         [
@@ -47,6 +47,6 @@ services:
       start_period: 30s
 
 networks:
-  openclaw-net:
+  {{MESH_NETWORK}}:
     external: true
-    name: openclaw-net
+    name: {{MESH_NETWORK}}

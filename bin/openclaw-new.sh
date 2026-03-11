@@ -15,6 +15,7 @@ usage() {
   echo "Options:"
   echo "  --pull            Pull latest Docker image before creating"
   echo "  --port PORT       Use a custom API port (WS = PORT+1)"
+  echo "  --mesh NAME       Join a named mesh network (default: openclaw-net)"
   echo "  -o, --onboard     Start interactive onboarding after creation"
   echo "  --preset NAME     Skip onboarding, apply a preset config"
   echo ""
@@ -60,6 +61,7 @@ render_template() {
     -e "s/{{WS_PORT}}/${WS_PORT}/g" \
     -e "s#{{DATA_DIR}}#${DATA_DIR}#g" \
     -e "s#{{TZ}}#${TZ}#g" \
+    -e "s/{{MESH_NETWORK}}/${MESH_NETWORK}/g" \
     "$tmpl" > "$out"
 }
 
@@ -68,10 +70,12 @@ CUSTOM_PORT=""
 ONBOARD=false
 PRESET=""
 RANGE_ARG=""
+MESH_NETWORK="openclaw-net"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --pull) PULL=true; shift ;;
     --port) [[ $# -ge 2 ]] || { echo "Error: --port requires a value"; exit 1; }; CUSTOM_PORT="$2"; shift 2 ;;
+    --mesh) [[ $# -ge 2 ]] || { echo "Error: --mesh requires a name"; exit 1; }; MESH_NETWORK="$2"; shift 2 ;;
     -o|--onboard) ONBOARD=true; shift ;;
     --preset) [[ $# -ge 2 ]] || { echo "Error: --preset requires a value"; exit 1; }; PRESET="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -244,7 +248,7 @@ apply_preset() {
   fi
 
   # Ensure the shared mesh network exists (idempotent)
-  docker network create openclaw-net 2>/dev/null || true
+  docker network create "$MESH_NETWORK" 2>/dev/null || true
 
   # Restart to pick up new config
   local container="openclaw${n}-gateway"
@@ -314,7 +318,10 @@ OPENCLAW_GATEWAY_BIND=loopback
 ENVEOF
 
   # Ensure the shared mesh network exists (idempotent)
-  docker network create openclaw-net 2>/dev/null || true
+  docker network create "$MESH_NETWORK" 2>/dev/null || true
+
+  # Store the mesh network assignment for this instance
+  echo "$MESH_NETWORK" > "${DATA_DIR}/.mesh-network"
 
   echo "Bringing up instance #$N..."
   $COMPOSE_BIN -f "${INSTANCE_DIR}/docker-compose.yml" up -d
@@ -339,15 +346,25 @@ ENVEOF
   echo "Data      : $DATA_DIR"
   echo "API Port  : $API_PORT"
   echo "WS Port   : $WS_PORT"
+  if [[ "$MESH_NETWORK" != "openclaw-net" ]]; then
+    echo "Network   : $MESH_NETWORK"
+  fi
 
   # Auto-refresh the mesh if it's running so the new instance is discovered
-  if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx openclaw-bridge; then
+  # Check for bridge matching this instance's network
+  local bridge_name="openclaw-bridge"
+  [[ "$MESH_NETWORK" == "openclaw-net" ]] || bridge_name="openclaw-bridge-${MESH_NETWORK}"
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$bridge_name"; then
     echo ""
     echo "Mesh network detected — refreshing..."
     local MESH_CMD
     MESH_CMD="$(command -v openclaw-mesh 2>/dev/null || echo "/usr/local/bin/openclaw-mesh")"
     if [[ -x "$MESH_CMD" ]]; then
-      "$MESH_CMD" refresh
+      if [[ "$MESH_NETWORK" == "openclaw-net" ]]; then
+        "$MESH_CMD" refresh
+      else
+        "$MESH_CMD" refresh "$MESH_NETWORK"
+      fi
     fi
   fi
 }

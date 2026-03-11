@@ -214,7 +214,7 @@ Each instance N gets deterministic ports:
 
 | Command | Description |
 |---------|-------------|
-| `openclaw-new N\|N-M [--preset NAME]` | Create instance(s) |
+| `openclaw-new N\|N-M [--preset NAME] [--mesh NAME]` | Create instance(s) |
 | `openclaw-delete N\|N-M` | Delete instance(s) |
 | `openclaw-onboard N` | Run onboarding wizard |
 | `openclaw-preset [list\|show\|create]` | Manage config presets |
@@ -225,7 +225,7 @@ Each instance N gets deterministic ports:
 | `openclaw-logs N` | Follow container logs |
 | `openclaw-health N` | Health check |
 | `openclaw-list` | List all instances with ports |
-| `openclaw-mesh start\|stop\|status\|refresh` | Manage inter-instance mesh network |
+| `openclaw-mesh start\|stop\|status\|refresh [NETWORK]` | Manage inter-instance mesh network |
 | `openclaw-help` | Full command reference |
 
 Run `openclaw-help` for detailed usage of every command.
@@ -333,6 +333,42 @@ curl -s -X POST http://openclaw-bridge:3000/send \
 
 The agent uses its built-in `exec` tool to run `curl` commands against the bridge. No extra configuration is needed inside the container — the bridge is reachable at `http://openclaw-bridge:3000` on the shared Docker network.
 
+### Named networks
+
+By default all instances join the `openclaw-net` network. You can create **isolated mesh networks** so groups of instances only see each other:
+
+```bash
+# Create instances on a "research" network
+openclaw-new 1 --mesh research
+openclaw-new 2 --mesh research
+
+# Create instances on a "devops" network
+openclaw-new 3 --mesh devops
+openclaw-new 4 --mesh devops
+
+# Start each network's mesh separately
+openclaw-mesh start research
+openclaw-mesh start devops
+```
+
+Each named network gets:
+- Its own Docker network (e.g. `research`, `devops`)
+- Its own bridge container (e.g. `openclaw-bridge-research`, `openclaw-bridge-devops`)
+- Its own config directory (`~/.openclaw-mesh/research/`, `~/.openclaw-mesh/devops/`)
+- Isolated roster announcements — instances only see members of their own network
+
+The network name is stored in `~/.openclawN/.mesh-network`. Instances on the `research` network reach their bridge at `http://openclaw-bridge-research:3000`, and `devops` instances at `http://openclaw-bridge-devops:3000`.
+
+All `openclaw-mesh` commands accept an optional `[NETWORK]` argument:
+
+```bash
+openclaw-mesh status research    # status of the research network
+openclaw-mesh refresh devops     # refresh the devops network
+openclaw-mesh stop research      # stop the research mesh
+```
+
+Omitting the network name operates on the default `openclaw-net` network.
+
 ### Bridge API endpoints
 
 | Method | Endpoint | Description |
@@ -397,10 +433,10 @@ For automatic relay (the response appears directly in Telegram without the agent
 ### Management commands
 
 ```bash
-openclaw-mesh start     # Create network, discover instances, launch bridge, announce roster
-openclaw-mesh stop      # Stop bridge, remove network if empty
-openclaw-mesh status    # Show network, bridge, and connection status
-openclaw-mesh refresh   # Re-discover instances, restart bridge, re-announce roster
+openclaw-mesh start [NETWORK]     # Create network, discover instances, launch bridge, announce roster
+openclaw-mesh stop [NETWORK]      # Stop bridge, remove network if empty
+openclaw-mesh status [NETWORK]    # Show network, bridge, and connection status
+openclaw-mesh refresh [NETWORK]   # Re-discover instances, restart bridge, re-announce roster
 ```
 
 New instances are **automatically discovered**: when you run `openclaw-new` while the mesh is running, it triggers `openclaw-mesh refresh` behind the scenes — the new instance is added to the config, connected to the network, and all instances receive an updated roster announcement.
@@ -438,11 +474,11 @@ Instances without a `.mesh-meta` file default to "Instance N" with no descriptio
 
 ### Architecture
 
-- **Docker network** (`openclaw-net`): A shared external network connecting all instance containers and the bridge
-- **Bridge container** (`openclaw-bridge`): Runs the same OpenClaw Docker image with a custom entrypoint (`bridge.js`). Uses the `ws` module already present in the image.
-- **Config**: Auto-generated at `~/.openclaw-mesh/config.json` from instance tokens and metadata
+- **Docker network**: A shared external network connecting instance containers and the bridge. Default: `openclaw-net`. Named networks use the network name directly (e.g. `research`, `devops`).
+- **Bridge container**: Runs the same OpenClaw Docker image with a custom entrypoint (`bridge.js`). Default: `openclaw-bridge`. Named networks: `openclaw-bridge-{name}`.
+- **Config**: Auto-generated at `~/.openclaw-mesh/config.json` (default) or `~/.openclaw-mesh/{name}/config.json` (named) from instance tokens and metadata.
 - **No host ports exposed**: The bridge listens only on the Docker network (port 3000). Agents reach it by container name.
-- **Roster announcements**: On start/refresh, the bridge injects a member list into each instance's main session so every agent knows the full topology
+- **Roster announcements**: On start/refresh, the bridge injects a member list into each instance's main session so every agent knows the full topology.
 
 ## Firewall / Reverse Proxy
 

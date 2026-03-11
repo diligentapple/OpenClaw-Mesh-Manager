@@ -5,29 +5,54 @@ set -euo pipefail
 # openclaw-mesh — Manage the cross-instance mesh network & bridge
 # ---------------------------------------------------------------------------
 
-NETWORK_NAME="openclaw-net"
+NETWORK_NAME="${OPENCLAW_MESH_NETWORK:-openclaw-net}"
 HOME_DIR="${HOME:-/root}"
-MESH_DIR="${HOME_DIR}/.openclaw-mesh"
+MESH_BASE_DIR="${HOME_DIR}/.openclaw-mesh"
 BRIDGE_CONTAINER="openclaw-bridge"
 BRIDGE_INTERNAL_PORT=3000
 SHARE_DIR="${OPENCLAW_MGR_SHARE:-/usr/local/share/openclaw-manager}"
 
+# Derived paths (updated after parsing args)
+MESH_DIR=""
+
+# Set derived variables based on network name
+set_network_vars() {
+  if [[ "$NETWORK_NAME" == "openclaw-net" ]]; then
+    MESH_DIR="${MESH_BASE_DIR}"
+    BRIDGE_CONTAINER="openclaw-bridge"
+  else
+    MESH_DIR="${MESH_BASE_DIR}/${NETWORK_NAME}"
+    BRIDGE_CONTAINER="openclaw-bridge-${NETWORK_NAME}"
+  fi
+}
+
 usage() {
   cat <<'EOF'
-Usage: openclaw-mesh <command>
+Usage: openclaw-mesh <command> [NETWORK]
 
 Commands:
-  start     Create mesh network, discover instances, launch bridge
-  stop      Stop the bridge and (if empty) remove the network
-  status    Show mesh status, connected instances, bridge health
-  refresh   Re-discover instances, regenerate config, restart bridge
+  start  [NETWORK]   Create mesh network, discover instances, launch bridge
+  stop   [NETWORK]   Stop the bridge and (if empty) remove the network
+  status [NETWORK]   Show mesh status, connected instances, bridge health
+  refresh [NETWORK]  Re-discover instances, regenerate config, restart bridge
 
-The mesh bridge lets OpenClaw instances communicate with each other.
-Inside any instance container the agent can reach the bridge at:
+NETWORK defaults to "openclaw-net" if omitted.
 
-  curl -s -X POST http://openclaw-bridge:3000/send \
+Named networks let you isolate groups of instances:
+  openclaw-mesh start research       # Only instances with --mesh research
+  openclaw-mesh start                # Default network (openclaw-net)
+
+Assign instances to a network when creating them:
+  openclaw-new 1 --mesh research
+  openclaw-new 2 --mesh research
+  openclaw-new 3 --mesh ops
+
+Inside a container on the "research" network, the bridge is at:
+  curl -s -X POST http://openclaw-bridge-research:3000/send \
     -H 'Content-Type: application/json' \
     -d '{"to": 2, "message": "Hello from instance 1"}'
+
+(For the default network, the bridge is at http://openclaw-bridge:3000)
 
 Bridge endpoints:
   GET  /health      Bridge health check
@@ -47,16 +72,26 @@ if ! docker compose version >/dev/null 2>&1; then
   COMPOSE_BIN="docker-compose"
 fi
 
-# Return list of "NUM:TOKEN" pairs for every discovered instance
+# Return list of "NUM:TOKEN" pairs for instances belonging to this network
 collect_instances() {
   local entries=()
 
   for dir in "${HOME_DIR}"/openclaw[0-9]*/; do
     [[ -d "$dir" ]] || continue
-    local base num env_file token
+    local base num env_file token inst_network
     base="$(basename "$dir")"
     num="${base#openclaw}"
     [[ "$num" =~ ^[0-9]+$ ]] || continue
+
+    # Check which network this instance belongs to
+    local net_file="${HOME_DIR}/.openclaw${num}/.mesh-network"
+    if [[ -f "$net_file" ]]; then
+      inst_network=$(head -1 "$net_file" 2>/dev/null | tr -d '[:space:]')
+    else
+      inst_network="openclaw-net"
+    fi
+    # Skip instances not on this mesh network
+    [[ "$inst_network" == "$NETWORK_NAME" ]] || continue
 
     env_file="${dir}.env"
     token=""
@@ -147,7 +182,7 @@ ensure_network() {
   fi
 }
 
-# Attach every running openclaw*-gateway container to the mesh network
+# Attach running instances belonging to this network to the mesh Docker network
 connect_instances() {
   local connected_list
   connected_list=$(docker network inspect "$NETWORK_NAME" \
@@ -155,10 +190,20 @@ connect_instances() {
 
   for dir in "${HOME_DIR}"/openclaw[0-9]*/; do
     [[ -d "$dir" ]] || continue
-    local base num container
+    local base num container inst_network
     base="$(basename "$dir")"
     num="${base#openclaw}"
     [[ "$num" =~ ^[0-9]+$ ]] || continue
+
+    # Check which network this instance belongs to
+    local net_file="${HOME_DIR}/.openclaw${num}/.mesh-network"
+    if [[ -f "$net_file" ]]; then
+      inst_network=$(head -1 "$net_file" 2>/dev/null | tr -d '[:space:]')
+    else
+      inst_network="openclaw-net"
+    fi
+    [[ "$inst_network" == "$NETWORK_NAME" ]] || continue
+
     container="openclaw${num}-gateway"
 
     # Only if the container is running
@@ -187,15 +232,15 @@ announce_roster() {
   # Build a roster text from config.json
   local roster=""
   if command -v jq >/dev/null 2>&1 && [[ -f "${MESH_DIR}/config.json" ]]; then
-    roster=$(jq -r '
-      "[OpenClaw Mesh Network] Connected instances:\n" +
+    roster=$(jq -r --arg net "$NETWORK_NAME" --arg bridge "$BRIDGE_CONTAINER" '
+      "[OpenClaw Mesh Network: " + $net + "] Connected instances:\n" +
       ([.instances | to_entries[] |
         "  • Instance " + .key +
         (if .value.name and .value.name != "" then " (" + .value.name + ")" else "" end) +
         (if .value.description and .value.description != "" then " — " + .value.description else "" end)
       ] | join("\n")) +
-      "\n\nTo message another instance: curl -s -X POST http://openclaw-bridge:3000/send -H \"Content-Type: application/json\" -d \'{\"to\": N, \"message\": \"...\"}\' " +
-      "\nTo see all instances: curl -s http://openclaw-bridge:3000/instances"
+      "\n\nTo message another instance: curl -s -X POST http://" + $bridge + ":3000/send -H \"Content-Type: application/json\" -d \'{\"to\": N, \"message\": \"...\"}\' " +
+      "\nTo see all instances: curl -s http://" + $bridge + ":3000/instances"
     ' "${MESH_DIR}/config.json" 2>/dev/null || true)
   fi
 
@@ -268,11 +313,11 @@ start_bridge() {
 # ---------------------------------------------------------------------------
 
 cmd_start() {
-  echo "=== Starting OpenClaw Mesh ==="
+  echo "=== Starting OpenClaw Mesh ($NETWORK_NAME) ==="
   echo ""
   ensure_network
   echo ""
-  echo "Discovering instances..."
+  echo "Discovering instances on $NETWORK_NAME..."
   generate_config
   echo ""
   echo "Connecting containers to mesh network..."
@@ -285,11 +330,11 @@ cmd_start() {
   announce_roster
   echo ""
   echo "==============================="
-  echo "Mesh is running!"
+  echo "Mesh is running! (network: $NETWORK_NAME)"
   echo ""
   echo "From inside any instance container the agent can run:"
   echo ""
-  echo '  curl -s -X POST http://openclaw-bridge:3000/send \'
+  echo "  curl -s -X POST http://${BRIDGE_CONTAINER}:3000/send \\"
   echo '    -H "Content-Type: application/json" \'
   echo '    -d '\''{"to": N, "message": "..."}'\'''
   echo ""
@@ -319,7 +364,7 @@ cmd_stop() {
 }
 
 cmd_status() {
-  echo "=== OpenClaw Mesh Status ==="
+  echo "=== OpenClaw Mesh Status ($NETWORK_NAME) ==="
   echo ""
 
   # Network info
@@ -391,7 +436,18 @@ cmd_refresh() {
 # Main
 # ---------------------------------------------------------------------------
 
-case "${1:-}" in
+CMD="${1:-}"
+shift 2>/dev/null || true
+
+# Optional second argument: network name
+if [[ -n "${1:-}" && "${1:-}" != -* ]]; then
+  NETWORK_NAME="$1"
+  shift
+fi
+
+set_network_vars
+
+case "$CMD" in
   start)   cmd_start ;;
   stop)    cmd_stop ;;
   status)  cmd_status ;;
