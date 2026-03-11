@@ -67,6 +67,26 @@ To force pulling the latest image before creating:
 openclaw-new --pull N
 ```
 
+### Step 3: Activate Telegram bot
+
+After onboarding with a Telegram channel, send a message to your bot on Telegram. You will see a pairing request in the container logs:
+
+```
+OpenClaw: access not configured.
+Your Telegram user id: XXXXXXXXXX
+Pairing code: XXXXXX
+Ask the bot owner to approve with:
+  openclaw pairing approve telegram XXXXXX
+```
+
+Approve the pairing from your host machine using the instance shortcut:
+
+```bash
+openclaw1 pairing approve telegram XXXXXX
+```
+
+Replace `1` with your instance number and `XXXXXX` with the actual pairing code shown in the logs.
+
 ### Presets (skip onboarding)
 
 Presets let you create fully configured instances without running the interactive onboarding wizard. On first use, you'll be prompted for your LLM API key which is cached for future runs.
@@ -115,26 +135,6 @@ If you didn't use `--preset`, run the interactive onboarding wizard:
 ```bash
 openclaw-onboard N
 ```
-
-### Step 3: Activate Telegram bot
-
-After onboarding with a Telegram channel, send a message to your bot on Telegram. You will see a pairing request in the container logs:
-
-```
-OpenClaw: access not configured.
-Your Telegram user id: XXXXXXXXXX
-Pairing code: XXXXXX
-Ask the bot owner to approve with:
-  openclaw pairing approve telegram XXXXXX
-```
-
-Approve the pairing from your host machine using the instance shortcut:
-
-```bash
-openclaw1 pairing approve telegram XXXXXX
-```
-
-Replace `1` with your instance number and `XXXXXX` with the actual pairing code shown in the logs.
 
 ### Health check / logs
 
