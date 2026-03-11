@@ -1,10 +1,6 @@
 # OpenClaw Multi-Instance Manager
 Easily create, manage, and delete multiple [OpenClaw](https://github.com/openclaw/openclaw) Docker instances on a single machine with deterministic naming, ports, data directories, and convenient shortcut commands for quick container access.
 
-Manage multiple [OpenClaw](https://github.com/openclaw/openclaw) Docker instances on a single machine with deterministic naming, ports, and data directories.
-
-This tool wraps the official OpenClaw Docker image (`ghcr.io/openclaw/openclaw`) to make it easy to run multiple isolated instances on a single VPS.
-
 ## Prerequisites
 
 - **Linux** (this tool is Linux-only; on Windows use WSL2, on macOS use a Linux VM)
@@ -21,7 +17,7 @@ Docker will be auto installed in this script (if not present on the machine).
 curl -fsSL https://raw.githubusercontent.com/diligentapple/OpenClaw-Multi-Instance-Manager/main/bootstrap.sh | sudo bash
 ```
 
-### Option A: Clone and install
+### Option B: Clone and install
 
 ```bash
 git clone https://github.com/diligentapple/OpenClaw-Multi-Instance-Manager.git
@@ -39,7 +35,7 @@ newgrp docker   # apply in current shell
 
 or log out and back in.
 
-## Usage
+## Create Container
 
 ### Step 1: Create an instance
 
@@ -55,7 +51,7 @@ Create and immediately run onboarding:
 openclaw-new -o 3
 ```
 
-Create a range of instances:
+Create a range of instances (#2 - #4):
 
 ```bash
 openclaw-new 2-4
@@ -67,9 +63,9 @@ To force pulling the latest image before creating (recommended):
 openclaw-new --pull N
 ```
 
-### Step 2: Onboarding (alternative to presets)
+### Step 2: Onboarding
 
-If you didn't use `--preset`, run the interactive onboarding wizard:
+If you didn't use `--preset` (optional function, see below), run the interactive onboarding wizard:
 
 ```bash
 openclaw-onboard N
@@ -77,7 +73,7 @@ openclaw-onboard N
 
 ### Step 3: Activate Telegram bot
 
-After onboarding with a Telegram channel, send a message to your bot on Telegram. You will see a pairing request in the container logs:
+After onboarding with a Telegram channel (recommended), send a message to your bot on Telegram. You will see a pairing request in the container logs:
 
 ```
 OpenClaw: access not configured.
@@ -95,7 +91,7 @@ openclaw1 pairing approve telegram XXXXXX
 
 Replace `1` with your instance number and `XXXXXX` with the actual pairing code shown in the logs.
 
-### Presets (skip onboarding)
+### Presets (optional, skip onboarding for batch setup)
 
 Presets let you create fully configured instances without running the interactive onboarding wizard. On first use, you'll be prompted for your LLM API key which is cached for future runs.
 
