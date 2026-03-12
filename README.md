@@ -1,162 +1,255 @@
 # OpenClaw Mesh Manager
-Create, manage, and network multiple [OpenClaw](https://github.com/openclaw/openclaw) Docker instances on a single machine — with cross-instance mesh communication, Telegram relay support, deterministic naming, ports, data directories, and convenient shortcut commands.
 
-## Prerequisites
+Run a fleet of [OpenClaw](https://github.com/openclaw/openclaw) AI agents on a single machine and let them talk to each other over a mesh network — with optional remote access via Tailscale.
 
-- **Linux** (this tool is Linux-only; on Windows use WSL2, on macOS use a Linux VM)
-- Docker Engine (20.10+)
-- Docker Compose plugin (`docker compose`) or legacy `docker-compose`
-- `curl` (for one-liner install)
-Docker will be auto installed in this script (if not present on the machine).
+## Quick Start
 
-## Install
-
-### Option A: One-liner (no git required)
+### 1. Install
 
 ```bash
+# One-liner (no git required)
 curl -fsSL https://raw.githubusercontent.com/diligentapple/OpenClaw-Mesh-Manager/main/bootstrap.sh | sudo bash
-```
 
-### Option B: Clone and install
-
-```bash
+# Or clone and install
 git clone https://github.com/diligentapple/OpenClaw-Mesh-Manager.git
 cd OpenClaw-Mesh-Manager
 sudo bash install.sh
 ```
 
-### After installing
-
-The installer adds your user to the `docker` group so you can run commands without `sudo`. For this to take effect, either:
+After installing, activate the `docker` group in your current shell:
 
 ```bash
-newgrp docker   # apply in current shell
+newgrp docker
 ```
 
-or log out and back in.
+> **Prerequisites:** Linux (use WSL2 on Windows, a VM on macOS). Docker is auto-installed if not present.
 
-## Create Container
-
-### Step 1: Create an instance
+### 2. Create instances
 
 ```bash
-openclaw-new N
+openclaw-new 1              # create instance #1 (only numbers allowed, for easier ports mapping)
+openclaw-new 2-4            # create instance #2 - #4, as many as you need 
 ```
 
-Example: `openclaw-new 3` creates instance #3.
+Each instance gets deterministic ports (`N8789` / `N8790`) and isolated data directories.
 
-Create and immediately run onboarding:
+To place instances on a named mesh network:
 
 ```bash
-openclaw-new -o 3
+openclaw-new 1 --mesh research
+openclaw-new 2 --mesh research
 ```
 
-Create a range of instances (#2 - #4):
+Without `--mesh`, all instances join the default `openclaw-net` network. The mesh bridge is started automatically when the first instance is created.
+
+For batch setup with a preset (skips interactive onboarding):
 
 ```bash
-openclaw-new 2-4
+openclaw-new 1-4 --preset default
+openclaw-new 1-4 --preset default --mesh research   # batch + named network
 ```
 
-To force pulling the latest image before creating (recommended):
+### 3. Onboard (if no preset was used)
 
 ```bash
-openclaw-new --pull N
+openclaw-onboard 1
 ```
 
-### Step 2: Onboarding
+The wizard configures your API keys, model, and optionally Telegram. Repeat for each instance. (Automate / Batch onboard with --preset flag, see below)
 
-If you didn't use `--preset` (optional function, see below), run the interactive onboarding wizard:
+### 4. Use the mesh
+
+The mesh bridge starts automatically when you create instances. From inside any container the agent can:
 
 ```bash
-openclaw-onboard N
+# Send a message to instance 2 and get the response
+curl -s -X POST http://openclaw-bridge:3000/send \
+  -H 'Content-Type: application/json' \
+  -d '{"to": 2, "message": "Summarize today's research"}'
+
+# List all instances on the mesh
+curl -s http://openclaw-bridge:3000/instances
 ```
 
-### Step 3: Activate Telegram bot
+To add an existing instance to a different mesh after creation:
 
-After onboarding with a Telegram channel (recommended), send a message to your bot on Telegram. You will see a pairing request in the container logs:
+```bash
+openclaw-mesh join 3 research   # move instance #3 to the "research" network
+openclaw-mesh leave 3           # remove instance #3 from its mesh entirely
+```
+
+### 5. Access the dashboard remotely using Tailscale (optional)
+
+If [Tailscale](https://tailscale.com/download/linux) is installed:
+
+```bash
+openclaw-remote 1
+```
+
+This gives you an HTTPS dashboard at `https://<hostname>/` from any device on your Tailnet. 
+```bash
+openclaw-list    # list all the OpenClaw instances with their tailscale url (if any)
+```
+---
+
+## Mesh Networking
+
+The mesh lets instances collaborate. Each instance runs as an independent AI agent; the mesh bridge routes messages between them over a shared Docker network.
+
+### How it works
+
+1. `openclaw-new` places every instance on a Docker network (default: `openclaw-net`). Using `--mesh NAME` targets a specific network instead.
+2. The mesh bridge is automatically started (or refreshed) each time an instance is created. You can also manage it manually with `openclaw-mesh start/stop/refresh`.
+3. Agents send and receive messages via the bridge's HTTP API.
+4. To move an existing instance to a different network, use `openclaw-mesh join N NETWORK`. To remove it from the mesh entirely, use `openclaw-mesh leave N`.
+
+### Named networks
+
+You can isolate groups of instances into separate mesh networks:
+
+```bash
+# Create instances on the "research" network (bridge auto-starts)
+openclaw-new 1 --mesh research
+openclaw-new 2 --mesh research
+
+# Create instances on the "ops" network
+openclaw-new 3 --mesh ops
+```
+
+To move an existing instance to a network after creation:
+
+```bash
+openclaw-mesh join 3 research    # moves instance #3 to "research"
+openclaw-mesh leave 3            # removes instance #3 from the mesh entirely
+```
+
+`join` updates the instance's config, reconnects the container, and refreshes both the old and new network's bridge. `leave` disconnects the container, clears the mesh config, and refreshes the old bridge.
+
+Network names may only contain letters, numbers, hyphens, and underscores.
+
+### Mesh commands
+
+| Command | Description |
+|---------|-------------|
+| `openclaw-mesh list` | List all networks and their member instances |
+| `openclaw-mesh start [NETWORK]` | Discover instances, launch bridge |
+| `openclaw-mesh stop [NETWORK]` | Stop the bridge (and remove the network if empty) |
+| `openclaw-mesh status [NETWORK]` | Show connected instances, bridge health |
+| `openclaw-mesh refresh [NETWORK]` | Re-discover instances and restart the bridge |
+| `openclaw-mesh join N [NETWORK]` | Move an existing instance to a mesh network |
+| `openclaw-mesh leave N` | Remove an instance from its current mesh network |
+
+The bridge is started automatically by `openclaw-new`. These commands are for manual management.
+
+### Bridge API
+
+All endpoints are accessible from inside any container on the mesh.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/health` | Bridge health check |
+| `GET` | `/instances` | List all registered instances |
+| `POST` | `/send` | Send a message and wait for the agent's response |
+| `POST` | `/inject` | Inject an assistant message into a session |
+| `POST` | `/relay` | Send to B, inject the response back into A's session |
+
+### Instance metadata
+
+Give instances human-readable names by creating a `.mesh-meta` file:
+
+```bash
+printf 'Researcher\nSearches the web and summarizes papers\n' > ~/.openclaw1/.mesh-meta
+```
+
+Line 1 is the name, line 2 is the description. The mesh roster announcement includes this info.
+
+---
+
+## Remote Access (Tailscale)
+
+Access the OpenClaw dashboard from any device on your Tailscale network with automatic HTTPS.
+
+### Enable
+
+```bash
+openclaw-remote N
+```
+
+This binds the instance to LAN, configures allowed origins, opens the firewall for Tailscale traffic, and starts `tailscale serve`.
+
+### Approve device pairing
+
+When a browser connects for the first time, OpenClaw may require device approval:
+
+```bash
+openclaw-remote N --approve        # interactive
+openclaw-remote N --approve --yes  # auto-approve
+```
+
+### Check status / disable
+
+```bash
+openclaw-remote N --status   # show Tailscale info, dashboard health, firewall state
+openclaw-remote N --off      # revert to loopback-only, stop Tailscale Serve
+```
+
+### Notes
+
+- Only one instance can use `https://<hostname>/` at a time. Others are still reachable at `http://<tailscale-ip>:<port>/`.
+- Firewall auto-configuration supports ufw, firewalld, iptables, and nftables. Cloud firewalls (AWS SGs, GCP VPC, etc.) don't affect Tailscale traffic.
+- Enable [MagicDNS](https://login.tailscale.com/admin/dns) in the Tailscale admin console for HTTPS certificates.
+
+---
+
+## Setup Guide Details
+
+### Presets
+
+Presets create fully configured instances without interactive onboarding. On first use you'll be prompted for your LLM API key (cached for future runs).
+
+```bash
+openclaw-new 3 --preset default    # local access only
+openclaw-new 3 --preset remote     # LAN binding for Tailscale
+openclaw-new 1-4 --preset default  # batch create
+```
+
+| Preset | Binding | Description |
+|--------|---------|-------------|
+| `default` | loopback | Local access only |
+| `remote` | lan | LAN binding for Tailscale |
+
+Manage presets:
+
+```bash
+openclaw-preset list      # list available presets
+openclaw-preset show default
+openclaw-preset create    # interactive: provider, model, Telegram, Tailscale
+```
+
+### Telegram bot activation
+
+After onboarding with Telegram, send a message to your bot. The logs will show a pairing request:
 
 ```
-OpenClaw: access not configured.
 Your Telegram user id: XXXXXXXXXX
 Pairing code: XXXXXX
-Ask the bot owner to approve with:
-  openclaw pairing approve telegram XXXXXX
 ```
 
-Approve the pairing from your host machine using the instance shortcut:
+Approve from the host:
 
 ```bash
 openclaw1 pairing approve telegram XXXXXX
 ```
 
-Replace `1` with your instance number and `XXXXXX` with the actual pairing code shown in the logs.
+### Container shortcuts
 
-### Presets (optional, skip onboarding for batch setup)
-
-Presets let you create fully configured instances without running the interactive onboarding wizard. On first use, you'll be prompted for your LLM API key which is cached for future runs.
+Every instance gets an `openclawN` shortcut:
 
 ```bash
-# Create a single instance with the default preset
-openclaw-new 3 --preset default
-
-# Create multiple instances at once
-openclaw-new 2-4 --preset default
-
-# Use the remote preset (LAN binding for Tailscale)
-openclaw-new 2-4 --preset remote
-```
-
-Built-in presets:
-
-| Preset    | Binding   | Description                        |
-|-----------|-----------|------------------------------------|
-| `default` | loopback  | Local access only                  |
-| `remote`  | lan       | LAN binding for Tailscale access   |
-
-#### Managing presets
-
-```bash
-# List available presets
-openclaw-preset list
-
-# Show a preset's contents
-openclaw-preset show default
-
-# Interactively create a custom preset
-openclaw-preset create
-```
-
-`openclaw-preset create` prompts for:
-- AI provider (OpenRouter, Anthropic, OpenAI) and API key
-- Primary model
-- Telegram bot integration (optional)
-- Tailscale remote access (if Tailscale is installed)
-
-### Health check / logs
-
-```bash
-openclaw-health N
-openclaw-logs N
-```
-
-### Run commands inside an instance
-
-When you create an instance, a shortcut `openclawN` is automatically created. Use it to run commands inside the container without needing `docker exec`:
-
-```bash
-# Directly run a single command
-openclaw1 node --version
-openclaw2 cat /app/config.json
-openclawN pairing approve telegram XXXXXX
-
-# Open an interactive shell in instance 1
-openclaw1
-```
-
-The longer form also works:
-
-```bash
-openclaw-exec 1 node --version
+openclaw1                                  # interactive shell
+openclaw1 node --version                   # run a command
+openclaw1 pairing approve telegram XXXXXX  # OpenClaw CLI
+openclaw-exec 1 node --version             # longer form
 ```
 
 ### Update an instance
@@ -165,139 +258,100 @@ openclaw-exec 1 node --version
 openclaw-update N
 ```
 
-This backs up your config, pulls the latest Docker image, recreates the container, runs config migration (`doctor`), restarts the gateway, and verifies health. If the health check fails, check logs with `openclaw-logs N --tail 20`.
+Backs up config, pulls the latest image, recreates the container, runs config migration, and verifies health.
 
-### List running instances
-
-```bash
-openclaw-list
-```
-
-### Help
+### Monitoring
 
 ```bash
-openclaw-help
+openclaw-health N          # health check
+openclaw-logs N            # follow container logs
+openclaw-list              # list all instances with ports and status
 ```
 
-Shows a complete reference of all available commands with usage details, options, and examples.
+### Watchdog
 
-### Delete an instance
+Auto-restart frozen gateways (no log output within a threshold):
 
 ```bash
-openclaw-delete N
-openclaw-delete 2-4    # delete a range
+openclaw-watchdog 1              # check instance 1
+openclaw-watchdog all            # check all running instances
+openclaw-watchdog --install all  # install as a cron job (every 5 min)
+openclaw-watchdog --uninstall    # remove cron job
 ```
 
-You will be prompted to type `DELETE` to confirm.
+### Delete instances
 
-## Port Scheme
+```bash
+openclaw-delete 1       # delete instance 1
+openclaw-delete 2-4     # delete a range
+```
 
-Each instance N gets deterministic ports:
+You'll be prompted to type `DELETE` to confirm.
 
-| Instance | API Port  | WS Port   |
-|----------|-----------|-----------|
-| 1        | 18789     | 18790     |
-| 2        | 28789     | 28790     |
-| 3        | 38789     | 38790     |
-| ...      | N8789     | N8790     |
+---
 
-## Directory Layout
+## Reference
 
-| Path                          | Purpose                                    |
-|-------------------------------|--------------------------------------------|
-| `~/openclawN/`                | Compose file + `.env` for instance N       |
-| `~/.openclawN/`               | Persistent data for instance N             |
-| `~/.openclawN/openclaw.json`  | Main configuration                         |
-| `~/.openclawN/workspace/`     | Working directory                          |
+### Port scheme
 
-## Command Reference
+| Instance | API Port | WS Port |
+|----------|----------|---------|
+| 1 | 18789 | 18790 |
+| 2 | 28789 | 28790 |
+| 3 | 38789 | 38790 |
+| N | N8789 | N8790 |
+
+Use `--port PORT` for a custom port (WS = PORT+1). Instances 6+ prompt for a port.
+
+### Directory layout
+
+| Path | Purpose |
+|------|---------|
+| `~/openclawN/` | Compose file + `.env` |
+| `~/.openclawN/` | Persistent data |
+| `~/.openclawN/openclaw.json` | Main configuration |
+| `~/.openclawN/workspace/` | Agent working directory |
+| `~/.openclawN/.mesh-network` | Mesh network assignment |
+| `~/.openclawN/.mesh-meta` | Instance name & description |
+| `~/.openclaw-mesh/` | Mesh bridge config & state |
+
+### All commands
 
 | Command | Description |
 |---------|-------------|
-| `openclaw-new N\|N-M [--preset NAME] [--mesh NAME]` | Create instance(s) |
-| `openclaw-delete N\|N-M` | Delete instance(s) |
+| `openclaw-new N\|N-M [--preset NAME] [--mesh NAME]` | Create instance(s). N must be a positive integer |
 | `openclaw-onboard N` | Run onboarding wizard |
-| `openclaw-preset [list\|show\|create]` | Manage config presets |
-| `openclaw-update N` | Update instance (backup, pull, migrate, verify) |
-| `openclaw-exec N [cmd...]` | Run command in container |
-| `openclawN [cmd...]` | Shortcut for openclaw-exec |
-| `openclaw-remote N` | Enable Tailscale remote access |
-| `openclaw-logs N` | Follow container logs |
+| `openclaw-mesh start\|stop\|status\|refresh\|join [NETWORK]` | Manage mesh network |
+| `openclaw-remote N [--off\|--status\|--approve]` | Tailscale remote access |
+| `openclawN [cmd...]` | Run command in container |
+| `openclaw-exec N [cmd...]` | Longer form of the above |
 | `openclaw-health N` | Health check |
-| `openclaw-list` | List all instances with ports |
-| `openclaw-mesh start\|stop\|status\|refresh [NETWORK]` | Manage inter-instance mesh network |
+| `openclaw-logs N` | Follow container logs |
+| `openclaw-list` | List all instances |
+| `openclaw-update N` | Update instance |
+| `openclaw-watchdog N\|all` | Monitor & auto-restart frozen gateways |
+| `openclaw-preset [list\|show\|create]` | Manage config presets |
+| `openclaw-delete N\|N-M` | Delete instance(s) |
 | `openclaw-help` | Full command reference |
-
-Run `openclaw-help` for detailed usage of every command.
-
-## Notes
-
-- Uses the official `ghcr.io/openclaw/openclaw` image (gateway + CLI services)
-- Each instance runs a gateway container and can launch a CLI container on-demand
-- 1 instance = 1 gateway container
-- Instances don't interfere with each other
-- Instances can communicate via the mesh network (`openclaw-mesh start`)
-- Safe to run many on one VPS
-- Creating an instance with a number that already exists is blocked -- you must delete first
-- `openclaw-new N` without `--pull` uses the locally cached image if one exists; use `openclaw-new --pull N` to ensure you get the latest version
-
-## Remote Dashboard Access (via Tailscale)
-
-Access your OpenClaw dashboard from any device on your Tailscale network with automatic HTTPS.
-
-### Prerequisites
-
-- [Tailscale](https://tailscale.com/download/linux) installed and connected (`sudo tailscale up`)
-- MagicDNS enabled in [Tailscale admin console](https://login.tailscale.com/admin/dns) (recommended for HTTPS)
-- `jq` (auto-installed if missing)
-
-### Enable remote access
-
-```bash
-openclaw-remote N
-```
-
-This configures the instance for LAN access, sets up allowed origins, configures the host firewall for Tailscale traffic, and starts `tailscale serve` for HTTPS.
-
-### Approve device pairing
-
-When a browser connects for the first time, OpenClaw may require device approval:
-
-```bash
-openclaw-remote N --approve       # interactive confirmation
-openclaw-remote N --approve --yes # auto-approve without confirmation
-```
-
-### Check status
-
-```bash
-openclaw-remote N --status
-```
-
-Shows config state, Tailscale info, dashboard health, paired/pending devices, and firewall state.
-
-### Disable remote access
-
-```bash
-openclaw-remote N --off
-```
-
-Reverts config to loopback-only and stops Tailscale Serve. Firewall rules are left in place (harmless).
-
-### Multiple instances
-
-Only one instance can use `https://<hostname>/` via Tailscale Serve at a time. Other instances remain accessible via their direct IP and port (`http://<tailscale-ip>:<port>/`).
-
-### Supported platforms
-
-The firewall auto-configuration handles ufw, firewalld, iptables, and nftables. Cloud-level firewalls (AWS Security Groups, GCP VPC rules, etc.) do not affect Tailscale traffic.
 
 ### Troubleshooting
 
-- **"Tailscale is not connected"** -- Run `sudo tailscale up`
-- **HTTPS not working** -- Enable MagicDNS at https://login.tailscale.com/admin/dns; certificates may take up to 30 seconds on first use
-- **Dashboard rejects connection** -- Check `openclaw-remote N --status` to verify `gateway.bind` is `lan` and origins are set
-- **"pairing required"** -- Run `openclaw-remote N --approve`
+| Problem | Fix |
+|---------|-----|
+| Tailscale not connected | `sudo tailscale up` |
+| HTTPS not working | Enable MagicDNS at https://login.tailscale.com/admin/dns |
+| Dashboard rejects connection | `openclaw-remote N --status` — check `gateway.bind` is `lan` |
+| Device pairing required | `openclaw-remote N --approve` |
+| Mesh bridge won't start | Ensure instances are running (`openclaw-list`) then `openclaw-mesh start` |
+| `non-string key in networks` | Network name must be alphanumeric / hyphens / underscores, not a bare number |
+
+### Notes
+
+- Uses the official `ghcr.io/openclaw/openclaw` Docker image
+- 1 instance = 1 gateway container, fully isolated
+- Safe to run many instances on a single VPS
+- Creating an instance with an existing number is blocked — delete first
+- `openclaw-new --pull N` ensures the latest image; without `--pull` the local cache is used
 
 ## Mesh Networking (Inter-Instance Communication)
 
@@ -433,13 +487,24 @@ For automatic relay (the response appears directly in Telegram without the agent
 ### Management commands
 
 ```bash
+openclaw-mesh list                # List all networks and their member instances
 openclaw-mesh start [NETWORK]     # Create network, discover instances, launch bridge, announce roster
 openclaw-mesh stop [NETWORK]      # Stop bridge, remove network if empty
 openclaw-mesh status [NETWORK]    # Show network, bridge, and connection status
 openclaw-mesh refresh [NETWORK]   # Re-discover instances, restart bridge, re-announce roster
+openclaw-mesh join N [NETWORK]    # Move an existing instance to a mesh network
+openclaw-mesh leave N             # Remove an instance from its current mesh network
 ```
 
-New instances are **automatically discovered**: when you run `openclaw-new` while the mesh is running, it triggers `openclaw-mesh refresh` behind the scenes — the new instance is added to the config, connected to the network, and all instances receive an updated roster announcement.
+The mesh bridge is **started automatically** by `openclaw-new`. If the bridge is already running, it refreshes. Either way the new instance is added to the config, connected to the network, and all instances receive an updated roster announcement.
+
+To add or remove instances after creation:
+
+```bash
+openclaw-mesh join 3 research    # moves instance #3 from its current network to "research"
+openclaw-mesh join 5              # moves instance #5 to the default network
+openclaw-mesh leave 3            # removes instance #3 from its mesh entirely
+```
 
 ### Instance discovery & announcements
 

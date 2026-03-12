@@ -10,6 +10,7 @@ INSTANCE LIFECYCLE
 
   openclaw-new [options] N|N-M [--preset NAME] [--mesh NAME]
       Create one or more OpenClaw instances with automatic ports (N8789/N8790).
+      N must be a positive integer (1, 2, 3, …). Names or letters are not allowed.
       Options:
         --pull          Pull the latest Docker image before creating
         --port PORT     Use a custom API port (WS port = PORT+1)
@@ -122,9 +123,16 @@ PRESETS
 MESH NETWORKING
 ---------------
 
+  openclaw-mesh list
+      List all mesh networks and their member instances.
+      Shows bridge status (running/stopped) per network and
+      container status per instance.
+
   openclaw-mesh start [NETWORK]
       Create a shared Docker network, discover all running instances,
       generate a bridge config, and start the bridge container.
+      The bridge is also started automatically by openclaw-new
+      when creating a new instance (no manual start needed).
       After this, every instance agent can reach the bridge at
       http://openclaw-bridge:3000 (default) or
       http://openclaw-bridge-NAME:3000 (named network).
@@ -141,8 +149,22 @@ MESH NETWORKING
       Re-discover instances (e.g. after creating new ones),
       regenerate the bridge config, restart the bridge, and
       announce the updated roster to all instances.
-      This is called AUTOMATICALLY when openclaw-new creates
-      an instance while the mesh is running.
+      This is called AUTOMATICALLY by openclaw-new.
+
+  openclaw-mesh join N [NETWORK]
+      Move an existing instance to a different mesh network.
+      Updates the instance's config, reconnects the container,
+      and refreshes both the old and new network's bridge.
+      Examples:
+        openclaw-mesh join 3 research   Move instance #3 to "research"
+        openclaw-mesh join 5            Move instance #5 to default network
+
+  openclaw-mesh leave N
+      Remove an instance from its current mesh network.
+      Disconnects the container, clears the mesh config,
+      and refreshes the old network's bridge.
+      Example:
+        openclaw-mesh leave 3           Remove instance #3 from its mesh
 
   Named networks:
       By default all instances join the openclaw-net network.
@@ -152,9 +174,11 @@ MESH NETWORKING
       Examples:
         openclaw-new 1 --mesh research
         openclaw-new 2 --mesh research
-        openclaw-mesh start research
         openclaw-mesh status research
         openclaw-mesh stop research
+
+      To add an existing instance to a network after creation:
+        openclaw-mesh join 3 research
 
   Instance metadata:
       Each instance can have a name and description stored in
@@ -202,8 +226,18 @@ DIRECTORY LAYOUT
   ~/openclawN/           Compose file for instance N
   ~/.openclawN/          Persistent data for instance N
     openclaw.json        Main configuration
+    .mesh-network        Current mesh network assignment
+    .mesh-meta           Instance name + description (for mesh roster)
     nodes/ or devices/   Device pairing data
     workspace/           Working directory
+  ~/.openclaw-mesh/      Default mesh bridge config & data
+    config.json          Discovered instances, tokens, metadata
+    bridge.js            Bridge server (copied from share dir)
+  ~/.openclaw-mesh/NAME/ Named mesh bridge config & data
+  /usr/local/share/openclaw-manager/
+    bridge/              Bridge source (bridge.js)
+    presets/             Preset config files
+    templates/           Docker compose template
 
 MORE INFO
 ---------

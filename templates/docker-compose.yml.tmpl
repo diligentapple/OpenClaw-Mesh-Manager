@@ -32,7 +32,7 @@ services:
       ]
     networks:
       - default
-      - {{MESH_NETWORK}}
+      - "{{MESH_NETWORK}}"
     healthcheck:
       test:
         [
@@ -47,6 +47,6 @@ services:
       start_period: 30s
 
 networks:
-  {{MESH_NETWORK}}:
+  "{{MESH_NETWORK}}":
     external: true
-    name: {{MESH_NETWORK}}
+    name: "{{MESH_NETWORK}}"

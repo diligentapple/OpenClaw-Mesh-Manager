@@ -31,10 +31,13 @@ usage() {
 Usage: openclaw-mesh <command> [NETWORK]
 
 Commands:
+  list               List all mesh networks and their member instances
   start  [NETWORK]   Create mesh network, discover instances, launch bridge
   stop   [NETWORK]   Stop the bridge and (if empty) remove the network
   status [NETWORK]   Show mesh status, connected instances, bridge health
   refresh [NETWORK]  Re-discover instances, regenerate config, restart bridge
+  join N [NETWORK]   Move an instance to a mesh network (refreshes both old and new)
+  leave N            Remove an instance from its current mesh network
 
 NETWORK defaults to "openclaw-net" if omitted.
 
@@ -46,6 +49,12 @@ Assign instances to a network when creating them:
   openclaw-new 1 --mesh research
   openclaw-new 2 --mesh research
   openclaw-new 3 --mesh ops
+
+Or add an existing instance to a network later:
+  openclaw-mesh join 1 research
+
+Remove an instance from the mesh:
+  openclaw-mesh leave 1
 
 Inside a container on the "research" network, the bridge is at:
   curl -s -X POST http://openclaw-bridge-research:3000/send \
@@ -239,7 +248,7 @@ announce_roster() {
         (if .value.name and .value.name != "" then " (" + .value.name + ")" else "" end) +
         (if .value.description and .value.description != "" then " — " + .value.description else "" end)
       ] | join("\n")) +
-      "\n\nTo message another instance: curl -s -X POST http://" + $bridge + ":3000/send -H \"Content-Type: application/json\" -d \'{\"to\": N, \"message\": \"...\"}\' " +
+      "\n\nTo message another instance: curl -s -X POST http://" + $bridge + ":3000/send -H \"Content-Type: application/json\" -d \u0027{\"to\": N, \"message\": \"...\"}\u0027 " +
       "\nTo see all instances: curl -s http://" + $bridge + ":3000/instances"
     ' "${MESH_DIR}/config.json" 2>/dev/null || true)
   fi
@@ -432,6 +441,249 @@ cmd_refresh() {
   announce_roster
 }
 
+cmd_list() {
+  echo "=== OpenClaw Mesh Networks ==="
+  echo ""
+
+  # Scan all instances to build a map of network -> instance numbers
+  declare -A network_instances
+  local has_any=false
+
+  for dir in "${HOME_DIR}"/openclaw[0-9]*/; do
+    [[ -d "$dir" ]] || continue
+    local base num inst_network
+    base="$(basename "$dir")"
+    num="${base#openclaw}"
+    [[ "$num" =~ ^[0-9]+$ ]] || continue
+
+    local net_file="${HOME_DIR}/.openclaw${num}/.mesh-network"
+    if [[ -f "$net_file" ]]; then
+      inst_network=$(head -1 "$net_file" 2>/dev/null | tr -d '[:space:]')
+    else
+      inst_network=""
+    fi
+
+    [[ -z "$inst_network" ]] && continue
+    has_any=true
+
+    if [[ -n "${network_instances[$inst_network]+x}" ]]; then
+      network_instances[$inst_network]+=" $num"
+    else
+      network_instances[$inst_network]="$num"
+    fi
+  done
+
+  if [[ "$has_any" == false ]]; then
+    echo "No instances are assigned to any mesh network."
+    return 0
+  fi
+
+  # Sort network names and display
+  local sorted_nets
+  sorted_nets=$(printf '%s\n' "${!network_instances[@]}" | sort)
+
+  for net in $sorted_nets; do
+    # Check if bridge is running for this network
+    local bridge_name="openclaw-bridge"
+    [[ "$net" == "openclaw-net" ]] || bridge_name="openclaw-bridge-${net}"
+    local bridge_status="stopped"
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$bridge_name"; then
+      bridge_status="running"
+    fi
+
+    echo "$net  (bridge: $bridge_status)"
+
+    # Sort instance numbers numerically and display each
+    local sorted_nums
+    sorted_nums=$(echo "${network_instances[$net]}" | tr ' ' '\n' | sort -n)
+    for num in $sorted_nums; do
+      local container="openclaw${num}-gateway"
+      local status="stopped"
+      if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$container"; then
+        status="running"
+      fi
+
+      local meta label
+      meta=$(get_instance_meta "$num")
+      local name="${meta%%|*}"
+      local desc="${meta#*|}"
+      label="#${num}"
+      if [[ "$name" != "Instance ${num}" && -n "$name" ]]; then
+        label+="  $name"
+      fi
+      if [[ -n "$desc" ]]; then
+        label+="  — $desc"
+      fi
+
+      echo "  • $label  ($status)"
+    done
+    echo ""
+  done
+}
+
+# Helper: refresh a specific network's bridge (by name), used by join/leave
+# to update the old network after moving/removing an instance.
+_refresh_network() {
+  local net="$1"
+  local saved_network="$NETWORK_NAME"
+  local saved_mesh_dir="$MESH_DIR"
+  local saved_bridge="$BRIDGE_CONTAINER"
+
+  NETWORK_NAME="$net"
+  set_network_vars
+
+  if docker ps --format '{{.Names}}' | grep -qx "$BRIDGE_CONTAINER"; then
+    echo "Refreshing $net mesh..."
+    generate_config
+    connect_instances
+    docker restart "$BRIDGE_CONTAINER" >/dev/null 2>&1
+    sleep 3
+    announce_roster
+  fi
+
+  NETWORK_NAME="$saved_network"
+  MESH_DIR="$saved_mesh_dir"
+  BRIDGE_CONTAINER="$saved_bridge"
+}
+
+cmd_join() {
+  local inst_num="$1"
+  local inst_dir="${HOME_DIR}/openclaw${inst_num}"
+  local data_dir="${HOME_DIR}/.openclaw${inst_num}"
+  local container="openclaw${inst_num}-gateway"
+  local compose_file="${inst_dir}/docker-compose.yml"
+
+  if [[ ! -d "$inst_dir" || ! -d "$data_dir" ]]; then
+    echo "Error: instance #${inst_num} does not exist."
+    echo "Create it first with: openclaw-new ${inst_num}"
+    exit 1
+  fi
+
+  # Read current network assignment
+  local old_network=""
+  local net_file="${data_dir}/.mesh-network"
+  if [[ -f "$net_file" ]]; then
+    old_network=$(head -1 "$net_file" 2>/dev/null | tr -d '[:space:]')
+  fi
+
+  if [[ "$old_network" == "$NETWORK_NAME" ]]; then
+    echo "Instance #${inst_num} is already on network $NETWORK_NAME."
+    return 0
+  fi
+
+  if [[ -n "$old_network" ]]; then
+    echo "Moving instance #${inst_num}: $old_network -> $NETWORK_NAME"
+  else
+    echo "Adding instance #${inst_num} to network $NETWORK_NAME"
+  fi
+
+  # Update the .mesh-network file
+  echo "$NETWORK_NAME" | sudo tee "${net_file}" > /dev/null
+  sudo chown 1000:1000 "${net_file}"
+
+  # Update the docker-compose.yml network references
+  if [[ -f "$compose_file" ]]; then
+    # Replace old network references with new (normal join-to-join case)
+    if [[ -n "$old_network" ]]; then
+      sed -i \
+        -e "s#- \"${old_network}\"#- \"${NETWORK_NAME}\"#g" \
+        -e "s#^  \"${old_network}\":#  \"${NETWORK_NAME}\":#g" \
+        -e "s#^    name: \"${old_network}\"#    name: \"${NETWORK_NAME}\"#g" \
+        "$compose_file"
+    fi
+
+    # If the network reference is still missing (e.g. after openclaw-mesh leave),
+    # add the entries back
+    if ! grep -q "\- \"${NETWORK_NAME}\"" "$compose_file"; then
+      sed -i "/^      - default$/a\\      - \"${NETWORK_NAME}\"" "$compose_file"
+    fi
+    if ! grep -q "^  \"${NETWORK_NAME}\":" "$compose_file"; then
+      printf '  "%s":\n    external: true\n    name: "%s"\n' \
+        "$NETWORK_NAME" "$NETWORK_NAME" >> "$compose_file"
+    fi
+    echo "Updated $compose_file"
+  fi
+
+  # Ensure the new network exists
+  docker network create "$NETWORK_NAME" 2>/dev/null || true
+
+  # Disconnect from old network, connect to new one
+  if docker ps --format '{{.Names}}' | grep -qx "$container"; then
+    if [[ -n "$old_network" ]]; then
+      docker network disconnect "$old_network" "$container" 2>/dev/null || true
+    fi
+    docker network connect "$NETWORK_NAME" "$container" 2>/dev/null \
+      && echo "$container connected to $NETWORK_NAME" \
+      || echo "$container — FAILED to connect (restart the container to apply)"
+  else
+    echo "Container $container is not running. Network will apply on next start."
+  fi
+
+  # Refresh the OLD network's bridge so it removes this instance from its roster
+  if [[ -n "$old_network" ]]; then
+    _refresh_network "$old_network"
+  fi
+
+  # Start or refresh the NEW network's bridge
+  if docker ps --format '{{.Names}}' | grep -qx "$BRIDGE_CONTAINER"; then
+    echo "Refreshing $NETWORK_NAME mesh bridge..."
+    cmd_refresh
+  else
+    echo "Starting $NETWORK_NAME mesh bridge..."
+    cmd_start
+  fi
+}
+
+cmd_leave() {
+  local inst_num="$1"
+  local inst_dir="${HOME_DIR}/openclaw${inst_num}"
+  local data_dir="${HOME_DIR}/.openclaw${inst_num}"
+  local container="openclaw${inst_num}-gateway"
+  local compose_file="${inst_dir}/docker-compose.yml"
+
+  if [[ ! -d "$inst_dir" || ! -d "$data_dir" ]]; then
+    echo "Error: instance #${inst_num} does not exist."
+    exit 1
+  fi
+
+  # Read current network assignment
+  local current_network="openclaw-net"
+  local net_file="${data_dir}/.mesh-network"
+  if [[ -f "$net_file" ]]; then
+    current_network=$(head -1 "$net_file" 2>/dev/null | tr -d '[:space:]')
+  fi
+
+  if [[ -z "$current_network" ]]; then
+    echo "Instance #${inst_num} is not part of any mesh network."
+    exit 0
+  fi
+
+  echo "Removing instance #${inst_num} from mesh network $current_network"
+
+  # Disconnect the container from the mesh network
+  if docker ps --format '{{.Names}}' | grep -qx "$container"; then
+    docker network disconnect "$current_network" "$container" 2>/dev/null || true
+    echo "$container disconnected from $current_network"
+  fi
+
+  # Remove the .mesh-network file so the instance is no longer associated
+  sudo rm -f "${net_file}"
+
+  # Remove the mesh network reference from docker-compose.yml
+  if [[ -f "$compose_file" ]]; then
+    sed -i \
+      -e "/- \"${current_network}\"/d" \
+      -e "/^  \"${current_network}\":/,/^  [^ ]/{ /^  \"${current_network}\":/d; /^    external:/d; /^    name:/d; }" \
+      "$compose_file"
+    echo "Updated $compose_file"
+  fi
+
+  # Refresh the network's bridge so the instance is removed from the roster
+  _refresh_network "$current_network"
+
+  echo "Instance #${inst_num} removed from mesh."
+}
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -439,8 +691,24 @@ cmd_refresh() {
 CMD="${1:-}"
 shift 2>/dev/null || true
 
-# Optional second argument: network name
+# For 'join' and 'leave', the next arg is the instance number
+INSTANCE_ARG=""
+if [[ "$CMD" == "join" || "$CMD" == "leave" ]]; then
+  if [[ -z "${1:-}" || ! "${1:-}" =~ ^[0-9]+$ ]]; then
+    echo "Error: '$CMD' requires an instance number."
+    echo "Usage: openclaw-mesh $CMD N${CMD:+$([[ $CMD == join ]] && echo ' [NETWORK]')}"
+    exit 1
+  fi
+  INSTANCE_ARG="$1"
+  shift
+fi
+
+# Optional argument: network name
 if [[ -n "${1:-}" && "${1:-}" != -* ]]; then
+  if [[ ! "$1" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    echo "Error: network name may only contain alphanumeric characters, hyphens, and underscores."
+    exit 1
+  fi
   NETWORK_NAME="$1"
   shift
 fi
@@ -448,10 +716,13 @@ fi
 set_network_vars
 
 case "$CMD" in
+  list)    cmd_list ;;
   start)   cmd_start ;;
   stop)    cmd_stop ;;
   status)  cmd_status ;;
   refresh) cmd_refresh ;;
+  join)    cmd_join "$INSTANCE_ARG" ;;
+  leave)   cmd_leave "$INSTANCE_ARG" ;;
   -h|--help) usage ;;
   *)
     usage

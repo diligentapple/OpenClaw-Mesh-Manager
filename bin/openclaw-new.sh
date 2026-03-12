@@ -61,7 +61,7 @@ render_template() {
     -e "s/{{WS_PORT}}/${WS_PORT}/g" \
     -e "s#{{DATA_DIR}}#${DATA_DIR}#g" \
     -e "s#{{TZ}}#${TZ}#g" \
-    -e "s/{{MESH_NETWORK}}/${MESH_NETWORK}/g" \
+    -e "s#{{MESH_NETWORK}}#${MESH_NETWORK}#g" \
     "$tmpl" > "$out"
 }
 
@@ -75,7 +75,11 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --pull) PULL=true; shift ;;
     --port) [[ $# -ge 2 ]] || { echo "Error: --port requires a value"; exit 1; }; CUSTOM_PORT="$2"; shift 2 ;;
-    --mesh) [[ $# -ge 2 ]] || { echo "Error: --mesh requires a name"; exit 1; }; MESH_NETWORK="$2"; shift 2 ;;
+    --mesh) [[ $# -ge 2 ]] || { echo "Error: --mesh requires a name"; exit 1; }
+      if [[ ! "$2" =~ ^[A-Za-z0-9_-]+$ ]]; then
+        echo "Error: mesh network name may only contain alphanumeric characters, hyphens, and underscores."; exit 1
+      fi
+      MESH_NETWORK="$2"; shift 2 ;;
     -o|--onboard) ONBOARD=true; shift ;;
     --preset) [[ $# -ge 2 ]] || { echo "Error: --preset requires a value"; exit 1; }; PRESET="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -302,6 +306,10 @@ create_instance() {
   fi
 
   mkdir -p "$INSTANCE_DIR" "$DATA_DIR"
+
+  # Store the mesh network assignment for this instance (before docker chown)
+  echo "$MESH_NETWORK" > "${DATA_DIR}/.mesh-network"
+
   # Container runs as uid 1000 (node). Create workspace and identity dirs
   # with correct ownership without requiring sudo on the host.
   docker run --rm --user root --entrypoint sh -v "${DATA_DIR}:/setup" "$OPENCLAW_IMAGE" \
@@ -319,9 +327,6 @@ ENVEOF
 
   # Ensure the shared mesh network exists (idempotent)
   docker network create "$MESH_NETWORK" 2>/dev/null || true
-
-  # Store the mesh network assignment for this instance
-  echo "$MESH_NETWORK" > "${DATA_DIR}/.mesh-network"
 
   echo "Bringing up instance #$N..."
   $COMPOSE_BIN -f "${INSTANCE_DIR}/docker-compose.yml" up -d
@@ -350,21 +355,22 @@ ENVEOF
     echo "Network   : $MESH_NETWORK"
   fi
 
-  # Auto-refresh the mesh if it's running so the new instance is discovered
-  # Check for bridge matching this instance's network
+  # Auto-start or refresh the mesh bridge so the new instance is discovered
   local bridge_name="openclaw-bridge"
   [[ "$MESH_NETWORK" == "openclaw-net" ]] || bridge_name="openclaw-bridge-${MESH_NETWORK}"
-  if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$bridge_name"; then
-    echo ""
-    echo "Mesh network detected — refreshing..."
-    local MESH_CMD
-    MESH_CMD="$(command -v openclaw-mesh 2>/dev/null || echo "/usr/local/bin/openclaw-mesh")"
-    if [[ -x "$MESH_CMD" ]]; then
-      if [[ "$MESH_NETWORK" == "openclaw-net" ]]; then
-        "$MESH_CMD" refresh
-      else
-        "$MESH_CMD" refresh "$MESH_NETWORK"
-      fi
+  local MESH_CMD
+  MESH_CMD="$(command -v openclaw-mesh 2>/dev/null || echo "/usr/local/bin/openclaw-mesh")"
+  if [[ -x "$MESH_CMD" ]]; then
+    local mesh_args=()
+    [[ "$MESH_NETWORK" == "openclaw-net" ]] || mesh_args+=("$MESH_NETWORK")
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$bridge_name"; then
+      echo ""
+      echo "Mesh bridge running — refreshing..."
+      "$MESH_CMD" refresh "${mesh_args[@]+"${mesh_args[@]}"}"
+    else
+      echo ""
+      echo "Starting mesh bridge ($MESH_NETWORK)..."
+      "$MESH_CMD" start "${mesh_args[@]+"${mesh_args[@]}"}"
     fi
   fi
 }
