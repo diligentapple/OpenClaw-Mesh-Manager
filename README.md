@@ -2,6 +2,8 @@
 
 Easily run a fleet of [OpenClaw](https://github.com/openclaw/openclaw) AI agents on a single machine via Docker and let them talk to each other over a mesh network — with optional remote access via Tailscale.
 
+通过 Docker 在单台机器上轻松运行数个 OpenClaw AI Agent，并允许 Agent 通过局域网相互通信。还可以选配 Tailscale 远程访问 Dashboard 操作面板。
+
 ## Quick Start
 
 ### 1. Install
