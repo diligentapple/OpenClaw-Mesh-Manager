@@ -293,43 +293,76 @@ create_instance() {
   fi
 
   if [[ -d "$INSTANCE_DIR" || -d "$DATA_DIR" ]]; then
-    echo "Skipping instance #$N: already exists."
-    echo " - $INSTANCE_DIR"
-    echo " - $DATA_DIR"
-    return 1
-  fi
+    # Directories exist — check if the container is also present
+    if docker ps -a --format '{{.Names}}' | grep -qx "$CONTAINER"; then
+      echo "Skipping instance #$N: already exists."
+      echo " - $INSTANCE_DIR"
+      echo " - $DATA_DIR"
+      return 1
+    fi
 
-  if port_in_use "$API_PORT" || port_in_use "$WS_PORT"; then
-    echo "Skipping instance #$N: port collision."
-    echo " - API_PORT=$API_PORT or WS_PORT=$WS_PORT already in use"
-    return 1
-  fi
+    # Directories exist but no container — recover by re-creating the container
+    echo "Instance #$N directories exist but container is missing. Recovering..."
+    mkdir -p "$INSTANCE_DIR" "$DATA_DIR"
 
-  mkdir -p "$INSTANCE_DIR" "$DATA_DIR"
+    # Ensure data dirs have correct ownership
+    docker run --rm --user root --entrypoint sh -v "${DATA_DIR}:/setup" "$OPENCLAW_IMAGE" \
+      -c 'mkdir -p /setup/workspace /setup/identity && chown -R 1000:1000 /setup'
 
-  # Store the mesh network assignment for this instance (before docker chown)
-  echo "$MESH_NETWORK" > "${DATA_DIR}/.mesh-network"
+    # Re-render compose file (in case template was updated)
+    render_template "$TEMPLATE" "${INSTANCE_DIR}/docker-compose.yml"
 
-  # Container runs as uid 1000 (node). Create workspace and identity dirs
-  # with correct ownership without requiring sudo on the host.
-  docker run --rm --user root --entrypoint sh -v "${DATA_DIR}:/setup" "$OPENCLAW_IMAGE" \
-    -c 'mkdir -p /setup/workspace /setup/identity && chown -R 1000:1000 /setup'
+    # Re-write .env only if missing (preserve existing token)
+    if [[ ! -f "${INSTANCE_DIR}/.env" ]]; then
+      local gw_token
+      gw_token=$(gen_token)
+      cat > "${INSTANCE_DIR}/.env" <<ENVEOF
+OPENCLAW_GATEWAY_TOKEN=${gw_token}
+OPENCLAW_GATEWAY_BIND=loopback
+ENVEOF
+    fi
 
-  render_template "$TEMPLATE" "${INSTANCE_DIR}/docker-compose.yml"
+    # Update mesh network assignment if --mesh was given
+    echo "$MESH_NETWORK" > "${DATA_DIR}/.mesh-network"
 
-  # Generate per-instance .env file for docker compose
-  local gw_token
-  gw_token=$(gen_token)
-  cat > "${INSTANCE_DIR}/.env" <<ENVEOF
+    docker network create "$MESH_NETWORK" 2>/dev/null || true
+
+    echo "Bringing up instance #$N..."
+    $COMPOSE_BIN -f "${INSTANCE_DIR}/docker-compose.yml" up -d
+  else
+    # Fresh creation
+    if port_in_use "$API_PORT" || port_in_use "$WS_PORT"; then
+      echo "Skipping instance #$N: port collision."
+      echo " - API_PORT=$API_PORT or WS_PORT=$WS_PORT already in use"
+      return 1
+    fi
+
+    mkdir -p "$INSTANCE_DIR" "$DATA_DIR"
+
+    # Store the mesh network assignment for this instance (before docker chown)
+    echo "$MESH_NETWORK" > "${DATA_DIR}/.mesh-network"
+
+    # Container runs as uid 1000 (node). Create workspace and identity dirs
+    # with correct ownership without requiring sudo on the host.
+    docker run --rm --user root --entrypoint sh -v "${DATA_DIR}:/setup" "$OPENCLAW_IMAGE" \
+      -c 'mkdir -p /setup/workspace /setup/identity && chown -R 1000:1000 /setup'
+
+    render_template "$TEMPLATE" "${INSTANCE_DIR}/docker-compose.yml"
+
+    # Generate per-instance .env file for docker compose
+    local gw_token
+    gw_token=$(gen_token)
+    cat > "${INSTANCE_DIR}/.env" <<ENVEOF
 OPENCLAW_GATEWAY_TOKEN=${gw_token}
 OPENCLAW_GATEWAY_BIND=loopback
 ENVEOF
 
-  # Ensure the shared mesh network exists (idempotent)
-  docker network create "$MESH_NETWORK" 2>/dev/null || true
+    # Ensure the shared mesh network exists (idempotent)
+    docker network create "$MESH_NETWORK" 2>/dev/null || true
 
-  echo "Bringing up instance #$N..."
-  $COMPOSE_BIN -f "${INSTANCE_DIR}/docker-compose.yml" up -d
+    echo "Bringing up instance #$N..."
+    $COMPOSE_BIN -f "${INSTANCE_DIR}/docker-compose.yml" up -d
+  fi
 
   # Create shortcut symlink: openclawN -> openclaw-exec
   EXEC_BIN="$(command -v openclaw-exec 2>/dev/null || echo "/usr/local/bin/openclaw-exec")"
