@@ -78,7 +78,7 @@ done
 
 # Always enable insecure auth so HTTP fallback URLs work without HTTPS
 CONFIG="${DATA_DIR}/openclaw.json"
-if [[ -f "$CONFIG" ]]; then
+if sudo test -f "$CONFIG" 2>/dev/null; then
   local_tmp=$(mktemp)
   if sudo jq '.gateway.controlUi.allowInsecureAuth = true' "$CONFIG" > "$local_tmp" && jq empty "$local_tmp" 2>/dev/null; then
     owner=$(sudo stat -c '%u:%g' "$CONFIG")

@@ -70,7 +70,7 @@ resolve_token() {
   fi
 
   # Fallback: JSON config
-  if [[ -z "$token" ]] && [[ -f "$CONFIG" ]]; then
+  if [[ -z "$token" ]] && sudo test -f "$CONFIG" 2>/dev/null; then
     token=$(sudo jq -r '.gateway.auth.token // empty' "$CONFIG" 2>/dev/null || true)
   fi
 
@@ -129,42 +129,10 @@ check_prerequisites() {
     exit 1
   fi
 
-  if [[ ! -f "$CONFIG" ]]; then
-    # Instance dirs exist but no config yet (not onboarded).
-    # Create a minimal config so remote setup can proceed.
-    if [[ -d "$DATA_DIR" ]]; then
-      echo "No openclaw.json found — creating minimal config for remote setup..."
-      local token
-      token=$(resolve_token "$N")
-      local port
-      port=$(docker port "$CONTAINER" 18789/tcp 2>/dev/null | head -1 | awk -F: '{print $NF}' || true)
-      port="${port:-18789}"
-      sudo tee "$CONFIG" > /dev/null <<MINJSON
-{
-  "gateway": {
-    "port": ${port},
-    "mode": "local",
-    "bind": "loopback",
-    "auth": {
-      "mode": "token",
-      "token": "${token:-}"
-    },
-    "controlUi": {
-      "allowedOrigins": [
-        "http://localhost:${port}",
-        "http://127.0.0.1:${port}"
-      ],
-      "allowInsecureAuth": true
-    }
-  }
-}
-MINJSON
-      sudo chown 1000:1000 "$CONFIG"
-    else
-      echo "Error: Instance #$N does not exist."
-      echo "  Create it first: openclaw-new $N"
-      exit 1
-    fi
+  if ! sudo test -f "$CONFIG" 2>/dev/null; then
+    echo "Error: openclaw.json not found for instance #$N."
+    echo "  Onboard first: openclaw-onboard $N"
+    exit 1
   fi
 
   # Approve only needs Docker + running container, not Tailscale

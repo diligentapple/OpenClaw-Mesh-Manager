@@ -21,7 +21,7 @@ fi
 
 # 1. Backup config before updating
 CONFIG="${DATA_DIR}/openclaw.json"
-if [[ -f "$CONFIG" ]]; then
+if sudo test -f "$CONFIG" 2>/dev/null; then
   backup="${CONFIG}.bak.$(date +%Y%m%d%H%M%S)"
   sudo cp "$CONFIG" "$backup"
   echo "Config backed up to $backup"
