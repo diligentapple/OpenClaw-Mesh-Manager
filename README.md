@@ -1,6 +1,6 @@
 # OpenClaw Mesh Manager
 
-Run a fleet of [OpenClaw](https://github.com/openclaw/openclaw) AI agents on a single machine and let them talk to each other over a mesh network — with optional remote access via Tailscale.
+Easily run a fleet of [OpenClaw](https://github.com/openclaw/openclaw) AI agents on a single machine via Docker and let them talk to each other over a mesh network — with optional remote access via Tailscale.
 
 ## Quick Start
 
