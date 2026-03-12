@@ -42,25 +42,30 @@ while read -r name; do
     ports="$api_port"
   fi
 
-  # Check for dashboard URL
+  # Build dashboard URL when port is known
   dashboard=""
-  config="${HOME_DIR}/.openclaw${n}/openclaw.json"
-  if [[ -f "$config" && -n "$api_port" ]]; then
-    bind_val=$(sudo jq -r '.gateway.bind // "loopback"' "$config" 2>/dev/null || echo "loopback")
+  if [[ -n "$api_port" ]]; then
+    config="${HOME_DIR}/.openclaw${n}/openclaw.json"
+
+    # Determine bind mode (default: loopback)
+    bind_val="loopback"
+    if sudo test -f "$config" 2>/dev/null; then
+      bind_val=$(sudo jq -r '.gateway.bind // "loopback"' "$config" 2>/dev/null || echo "loopback")
+    fi
+
     # .env token is authoritative (it's passed to the container as an env var).
     # Fall back to the JSON config if .env is missing.
     token=""
     env_file="${HOME_DIR}/openclaw${n}/.env"
     if [[ -f "$env_file" ]]; then
-      token=$(grep -oP '^OPENCLAW_GATEWAY_TOKEN=\K.*' "$env_file" 2>/dev/null || echo "")
+      token=$(grep -oP '^OPENCLAW_GATEWAY_TOKEN=\K.*' "$env_file" 2>/dev/null || true)
     fi
-    if [[ -z "$token" ]]; then
+    if [[ -z "$token" ]] && sudo test -f "$config" 2>/dev/null; then
       token=$(sudo jq -r '.gateway.auth.token // empty' "$config" 2>/dev/null || echo "")
     fi
+
     token_param=""
-    if [[ -n "$token" ]]; then
-      token_param="?token=${token}"
-    fi
+    [[ -n "$token" ]] && token_param="?token=${token}"
 
     if [[ "$bind_val" == "lan" ]]; then
       # Check tailscale first

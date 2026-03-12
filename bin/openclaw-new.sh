@@ -308,6 +308,8 @@ create_instance() {
     # Ensure data dirs have correct ownership
     docker run --rm --user root --entrypoint sh -v "${DATA_DIR}:/setup" "$OPENCLAW_IMAGE" \
       -c 'mkdir -p /setup/workspace /setup/identity && chown -R 1000:1000 /setup'
+    # Allow host user to traverse the data dir (owned by container uid 1000)
+    chmod o+rx "$DATA_DIR"
 
     # Re-render compose file (in case template was updated)
     render_template "$TEMPLATE" "${INSTANCE_DIR}/docker-compose.yml"
@@ -346,6 +348,8 @@ ENVEOF
     # with correct ownership without requiring sudo on the host.
     docker run --rm --user root --entrypoint sh -v "${DATA_DIR}:/setup" "$OPENCLAW_IMAGE" \
       -c 'mkdir -p /setup/workspace /setup/identity && chown -R 1000:1000 /setup'
+    # Allow host user to traverse the data dir (owned by container uid 1000)
+    chmod o+rx "$DATA_DIR"
 
     render_template "$TEMPLATE" "${INSTANCE_DIR}/docker-compose.yml"
 
