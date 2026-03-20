@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Source shared helpers (docker permission wrapper, compose detection)
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/common.sh" 2>/dev/null \
+  || source "/usr/local/lib/openclaw-manager/common.sh"
+
 usage() { echo "Usage: openclaw-update N"; }
 
 N="${1:-}"
@@ -12,10 +16,7 @@ DATA_DIR="${HOME_DIR}/.openclaw${N}"
 COMPOSE_FILE="${INSTANCE_DIR}/docker-compose.yml"
 CONTAINER="openclaw${N}-gateway"
 
-COMPOSE_BIN="docker compose"
-if ! docker compose version >/dev/null 2>&1; then
-  COMPOSE_BIN="docker-compose"
-fi
+detect_compose_bin
 
 [[ -f "$COMPOSE_FILE" ]] || { echo "Missing: $COMPOSE_FILE"; exit 1; }
 

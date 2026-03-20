@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Source shared helpers (docker permission wrapper)
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/common.sh" 2>/dev/null \
+  || source "/usr/local/lib/openclaw-manager/common.sh"
+
 # Show which line crashed instead of failing silently
 trap 'echo "Error: script failed at line $LINENO (exit code $?)" >&2' ERR
 
