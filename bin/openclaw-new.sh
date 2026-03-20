@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Source shared helpers (docker permission wrapper, compose detection)
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/common.sh" 2>/dev/null \
+  || source "/usr/local/lib/openclaw-manager/common.sh"
+
 usage() {
   echo "Usage: openclaw-new [options] N|N-M [--preset NAME]"
   echo ""
@@ -144,12 +148,7 @@ fi
 need_cmd docker
 need_cmd sed
 
-# Prefer docker compose plugin; fallback to docker-compose if user has legacy
-COMPOSE_BIN="docker compose"
-if ! docker compose version >/dev/null 2>&1; then
-  need_cmd docker-compose
-  COMPOSE_BIN="docker-compose"
-fi
+detect_compose_bin
 
 HOME_DIR="${HOME:-/root}"
 TZ="${TZ:-Asia/Tokyo}"

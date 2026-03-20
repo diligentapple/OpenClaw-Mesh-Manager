@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Source shared helpers (docker permission wrapper, compose detection)
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/common.sh" 2>/dev/null \
+  || source "/usr/local/lib/openclaw-manager/common.sh"
+
 usage() {
   echo "Usage: openclaw-watchdog [options] N|all"
   echo ""
@@ -74,13 +78,7 @@ fi
 
 [[ -z "$TARGET" ]] && { usage; exit 1; }
 
-# Resolve compose binary
-COMPOSE_BIN="docker compose"
-if ! docker compose version >/dev/null 2>&1; then
-  if command -v docker-compose >/dev/null 2>&1; then
-    COMPOSE_BIN="docker-compose"
-  fi
-fi
+detect_compose_bin
 
 HOME_DIR="${HOME:-/root}"
 

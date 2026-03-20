@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Source shared helpers (docker permission wrapper, compose detection)
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/common.sh" 2>/dev/null \
+  || source "/usr/local/lib/openclaw-manager/common.sh"
+
 usage() { echo "Usage: openclaw-onboard N"; }
 
 N="${1:-}"
@@ -44,12 +48,7 @@ docker run --rm -it \
 # IMPORTANT: use docker compose up (not docker restart) so .env is re-read.
 echo "Restarting gateway to apply new configuration..."
 COMPOSE_FILE="${HOME_DIR}/openclaw${N}/docker-compose.yml"
-COMPOSE_BIN="docker compose"
-if ! docker compose version >/dev/null 2>&1; then
-  if command -v docker-compose >/dev/null 2>&1; then
-    COMPOSE_BIN="docker-compose"
-  fi
-fi
+detect_compose_bin
 
 if [[ -f "$COMPOSE_FILE" ]]; then
   $COMPOSE_BIN --project-directory "${HOME_DIR}/openclaw${N}" \
