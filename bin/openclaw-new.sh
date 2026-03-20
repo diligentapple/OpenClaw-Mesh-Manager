@@ -319,7 +319,7 @@ create_instance() {
       gw_token=$(gen_token)
       cat > "${INSTANCE_DIR}/.env" <<ENVEOF
 OPENCLAW_GATEWAY_TOKEN=${gw_token}
-OPENCLAW_GATEWAY_BIND=loopback
+OPENCLAW_GATEWAY_BIND=lan
 ENVEOF
     fi
 
@@ -353,11 +353,14 @@ ENVEOF
     render_template "$TEMPLATE" "${INSTANCE_DIR}/docker-compose.yml"
 
     # Generate per-instance .env file for docker compose
+    # Bind to lan (0.0.0.0) so the mesh bridge can reach the gateway over the
+    # Docker network.  Host-level access is still controlled by the port mapping
+    # in docker-compose.yml, so this is safe.
     local gw_token
     gw_token=$(gen_token)
     cat > "${INSTANCE_DIR}/.env" <<ENVEOF
 OPENCLAW_GATEWAY_TOKEN=${gw_token}
-OPENCLAW_GATEWAY_BIND=loopback
+OPENCLAW_GATEWAY_BIND=lan
 ENVEOF
 
     # Ensure the shared mesh network exists (idempotent)

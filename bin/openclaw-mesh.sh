@@ -582,6 +582,12 @@ cmd_join() {
   echo "$NETWORK_NAME" | sudo tee "${net_file}" > /dev/null
   sudo chown 1000:1000 "${net_file}"
 
+  # Ensure gateway binds to lan so the bridge can reach it over the Docker network
+  local env_file="${inst_dir}/.env"
+  if [[ -f "$env_file" ]]; then
+    sed -i 's/^OPENCLAW_GATEWAY_BIND=.*/OPENCLAW_GATEWAY_BIND=lan/' "$env_file"
+  fi
+
   # Update the docker-compose.yml network references
   if [[ -f "$compose_file" ]]; then
     # Replace old network references with new (normal join-to-join case)
@@ -608,16 +614,13 @@ cmd_join() {
   # Ensure the new network exists
   docker network create "$NETWORK_NAME" 2>/dev/null || true
 
-  # Disconnect from old network, connect to new one
-  if docker ps --format '{{.Names}}' | grep -qx "$container"; then
-    if [[ -n "$old_network" ]]; then
-      docker network disconnect "$old_network" "$container" 2>/dev/null || true
-    fi
-    docker network connect "$NETWORK_NAME" "$container" 2>/dev/null \
-      && echo "$container connected to $NETWORK_NAME" \
-      || echo "$container — FAILED to connect (restart the container to apply)"
+  # Recreate the container so it picks up the updated .env (BIND=lan) and
+  # network references from docker-compose.yml.
+  if docker ps -a --format '{{.Names}}' | grep -qx "$container"; then
+    echo "Recreating $container to apply network and bind changes..."
+    $COMPOSE_BIN -f "$compose_file" up -d --force-recreate >/dev/null 2>&1 || true
   else
-    echo "Container $container is not running. Network will apply on next start."
+    echo "Container $container does not exist. Network will apply on next start."
   fi
 
   # Refresh the OLD network's bridge so it removes this instance from its roster
