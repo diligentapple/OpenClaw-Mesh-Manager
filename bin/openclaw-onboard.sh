@@ -50,18 +50,26 @@ echo "Restarting gateway to apply new configuration..."
 COMPOSE_FILE="${HOME_DIR}/openclaw${N}/docker-compose.yml"
 detect_compose_bin
 
-# Patch compose file: ensure NODE_OPTIONS is set and replace the heavyweight
-# node healthcheck with curl (spawning a full V8 runtime every 30s for a
-# health check was causing OOM on small instances).
+# Patch existing compose files to fix OOM issues:
+#  1. Add --max-old-space-size=384 directly to node command (entrypoint can override NODE_OPTIONS env)
+#  2. Replace deploy.resources (swarm-only) with mem_limit (works standalone)
+#  3. Replace node-based healthcheck with lightweight curl/wget
 if [[ -f "$COMPOSE_FILE" ]]; then
-  if ! grep -q 'NODE_OPTIONS' "$COMPOSE_FILE"; then
-    sed -i '/^      PATH:/a\      NODE_OPTIONS: "--max-old-space-size=384"' "$COMPOSE_FILE"
-  fi
-  # Replace node-based healthcheck with lightweight curl
-  if grep -q '"node"' "$COMPOSE_FILE" && grep -q 'healthz' "$COMPOSE_FILE"; then
-    python3 -c "
+  python3 -c "
 import re, sys
 text = open(sys.argv[1]).read()
+# 1. Add --max-old-space-size to node command if missing
+if '--max-old-space-size' not in text:
+    text = text.replace('\"node\",\n        \"dist/index.js\"', '\"node\",\n        \"--max-old-space-size=384\",\n        \"dist/index.js\"')
+# 2. Replace deploy.resources block with mem_limit
+if 'deploy:' in text:
+    text = re.sub(r'\n    deploy:\n      resources:\n        limits:\n          memory:\s*\S+\n', '\n    mem_limit: 512m\n', text)
+if 'mem_limit' not in text:
+    text = text.replace('\n    init: true\n', '\n    init: true\n    mem_limit: 512m\n')
+# 3. Add NODE_OPTIONS env if missing
+if 'NODE_OPTIONS' not in text:
+    text = text.replace('      PATH:', '      NODE_OPTIONS: \"--max-old-space-size=384\"\n      PATH:')
+# 4. Replace node-based healthcheck with curl/wget
 text = re.sub(
     r'healthcheck:.*?start_period:\s*\S+',
     '''healthcheck:
@@ -73,7 +81,6 @@ text = re.sub(
     text, flags=re.DOTALL)
 open(sys.argv[1], 'w').write(text)
 " "$COMPOSE_FILE" 2>/dev/null || true
-  fi
 fi
 
 if [[ -f "$COMPOSE_FILE" ]]; then
