@@ -33,13 +33,19 @@ python3 -c "
 import re, sys
 text = open(sys.argv[1]).read()
 if '--max-old-space-size' not in text:
-    text = text.replace('\"node\",\n        \"dist/index.js\"', '\"node\",\n        \"--max-old-space-size=384\",\n        \"dist/index.js\"')
+    text = text.replace('\"node\",\n        \"dist/index.js\"', '\"node\",\n        \"--max-old-space-size=1536\",\n        \"dist/index.js\"')
+else:
+    text = re.sub(r'--max-old-space-size=\d+', '--max-old-space-size=1536', text)
 if 'deploy:' in text:
-    text = re.sub(r'\n    deploy:\n      resources:\n        limits:\n          memory:\s*\S+\n', '\n    mem_limit: 512m\n', text)
-if 'mem_limit' not in text:
-    text = text.replace('\n    init: true\n', '\n    init: true\n    mem_limit: 512m\n')
+    text = re.sub(r'\n    deploy:\n      resources:\n        limits:\n          memory:\s*\S+\n', '\n    mem_limit: 2g\n', text)
+if 'mem_limit' in text:
+    text = re.sub(r'mem_limit:\s*\S+', 'mem_limit: 2g', text)
+else:
+    text = text.replace('\n    init: true\n', '\n    init: true\n    mem_limit: 2g\n')
 if 'NODE_OPTIONS' not in text:
-    text = text.replace('      PATH:', '      NODE_OPTIONS: \"--max-old-space-size=384\"\n      PATH:')
+    text = text.replace('      PATH:', '      NODE_OPTIONS: \"--max-old-space-size=1536\"\n      PATH:')
+else:
+    text = re.sub(r'NODE_OPTIONS:.*', 'NODE_OPTIONS: \"--max-old-space-size=1536\"', text)
 text = re.sub(
     r'healthcheck:.*?start_period:\s*\S+',
     '''healthcheck:
