@@ -21,17 +21,11 @@ services:
       - "{{WS_PORT}}:18790"
     init: true
     mem_limit: 2g
-    command:
+    entrypoint:
       [
-        "node",
-        "--max-old-space-size=1536",
-        "dist/index.js",
-        "gateway",
-        "--bind",
-        "${OPENCLAW_GATEWAY_BIND:-loopback}",
-        "--port",
-        "18789",
-        "--allow-unconfigured",
+        "/bin/sh",
+        "-c",
+        "rm -f /home/node/.openclaw/*.lock /home/node/.openclaw/*.pid /home/node/.openclaw/gateway.lock 2>/dev/null; exec node --max-old-space-size=1536 dist/index.js gateway --bind ${OPENCLAW_GATEWAY_BIND:-loopback} --port 18789 --allow-unconfigured"
       ]
     networks:
       - default

@@ -55,8 +55,21 @@ text = re.sub(
       retries: 3
       start_period: 45s''',
     text, flags=re.DOTALL)
+# 5. Convert command: to entrypoint: with stale lock cleanup
+text = re.sub(
+    r'command:\s*\[.*?\]',
+    '''entrypoint:
+      [
+        \"/bin/sh\",
+        \"-c\",
+        \"rm -f /home/node/.openclaw/*.lock /home/node/.openclaw/*.pid 2>/dev/null; exec node --max-old-space-size=1536 dist/index.js gateway --bind \${OPENCLAW_GATEWAY_BIND:-loopback} --port 18789 --allow-unconfigured\"
+      ]''',
+    text, flags=re.DOTALL)
 open(sys.argv[1], 'w').write(text)
 " "$COMPOSE_FILE" 2>/dev/null || true
+
+# Remove stale lock/pid files from data dir before starting
+rm -f "${DATA_DIR}"/*.lock "${DATA_DIR}"/*.pid 2>/dev/null || true
 
 # 2. Pull latest image
 echo "Pulling latest OpenClaw image..."
