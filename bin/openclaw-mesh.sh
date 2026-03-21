@@ -307,6 +307,7 @@ start_bridge() {
     --name "$BRIDGE_CONTAINER" \
     --network "$NETWORK_NAME" \
     --restart unless-stopped \
+    --memory 128m \
     -v "${MESH_DIR}/bridge.js:/bridge/bridge.js:ro" \
     -v "${MESH_DIR}/config.json:/data/config.json:ro" \
     -e BRIDGE_PORT="$BRIDGE_INTERNAL_PORT" \
@@ -335,9 +336,9 @@ cmd_start() {
   echo ""
   start_bridge
   echo ""
-  # Wait a moment for the bridge to connect, then announce
-  sleep 3
-  announce_roster
+  # Announce roster in background — gateways need ~30s to start listening
+  # so we defer rather than block the caller with a long sleep.
+  ( sleep 30 && announce_roster ) &
   echo ""
   echo "==============================="
   echo "Mesh is running! (network: $NETWORK_NAME)"
@@ -437,9 +438,8 @@ cmd_refresh() {
     start_bridge
   fi
 
-  # Announce the updated roster to all instances
-  sleep 3
-  announce_roster
+  # Announce the updated roster in background — instances may still be starting
+  ( sleep 15 && announce_roster ) &
 }
 
 cmd_list() {

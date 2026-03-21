@@ -87,3 +87,29 @@ if sudo test -f "$CONFIG" 2>/dev/null; then
     rm -f "$local_tmp"
   fi
 fi
+
+# Start or refresh the mesh bridge now that this instance is onboarded
+# and the gateway is running. This is where mesh setup belongs — not during
+# openclaw-new — because the bridge needs gateways that are fully configured.
+MESH_NETWORK=""
+NET_FILE="${DATA_DIR}/.mesh-network"
+if [[ -f "$NET_FILE" ]]; then
+  MESH_NETWORK=$(head -1 "$NET_FILE" 2>/dev/null | tr -d '[:space:]')
+fi
+
+if [[ -n "$MESH_NETWORK" ]]; then
+  MESH_CMD="$(command -v openclaw-mesh 2>/dev/null || echo "/usr/local/bin/openclaw-mesh")"
+  if [[ -x "$MESH_CMD" ]]; then
+    local_bridge="openclaw-bridge"
+    [[ "$MESH_NETWORK" == "openclaw-net" ]] || local_bridge="openclaw-bridge-${MESH_NETWORK}"
+    mesh_args=()
+    [[ "$MESH_NETWORK" == "openclaw-net" ]] || mesh_args+=("$MESH_NETWORK")
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$local_bridge"; then
+      echo "Refreshing mesh bridge ($MESH_NETWORK)..."
+      "$MESH_CMD" refresh "${mesh_args[@]+"${mesh_args[@]}"}"
+    else
+      echo "Starting mesh bridge ($MESH_NETWORK)..."
+      "$MESH_CMD" start "${mesh_args[@]+"${mesh_args[@]}"}"
+    fi
+  fi
+fi
