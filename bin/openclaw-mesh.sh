@@ -231,6 +231,46 @@ connect_instances() {
   done
 }
 
+# Write a .mesh-bridge file into each instance's data directory so the agent
+# inside the container can always discover the bridge endpoint — regardless of
+# whether the roster injection succeeded.
+write_bridge_info() {
+  for dir in "${HOME_DIR}"/openclaw[0-9]*/; do
+    [[ -d "$dir" ]] || continue
+    local base num inst_network
+    base="$(basename "$dir")"
+    num="${base#openclaw}"
+    [[ "$num" =~ ^[0-9]+$ ]] || continue
+
+    local net_file="${HOME_DIR}/.openclaw${num}/.mesh-network"
+    if [[ -f "$net_file" ]]; then
+      inst_network=$(head -1 "$net_file" 2>/dev/null | tr -d '[:space:]')
+    else
+      inst_network="openclaw-net"
+    fi
+    [[ "$inst_network" == "$NETWORK_NAME" ]] || continue
+
+    local data_dir="${HOME_DIR}/.openclaw${num}"
+    local info_file="${data_dir}/.mesh-bridge"
+    cat > "$info_file" <<MESHEOF
+# OpenClaw Mesh Bridge — auto-generated, do not edit
+# Query the bridge to discover peers and send messages.
+MESH_NETWORK=${NETWORK_NAME}
+BRIDGE_HOST=${BRIDGE_CONTAINER}
+BRIDGE_PORT=${BRIDGE_INTERNAL_PORT}
+BRIDGE_URL=http://${BRIDGE_CONTAINER}:${BRIDGE_INTERNAL_PORT}
+
+# Discovery:
+#   curl -s \${BRIDGE_URL}/instances
+#
+# Send a message to another instance:
+#   curl -s -X POST \${BRIDGE_URL}/send -H 'Content-Type: application/json' -d '{"to": N, "message": "..."}'
+MESHEOF
+    # Match ownership to the data dir (container uid 1000)
+    chown 1000:1000 "$info_file" 2>/dev/null || sudo chown 1000:1000 "$info_file" 2>/dev/null || true
+  done
+}
+
 # Announce the network roster to all connected instances via the bridge
 announce_roster() {
   if ! docker ps --format '{{.Names}}' | grep -qx "$BRIDGE_CONTAINER"; then
@@ -333,6 +373,7 @@ cmd_start() {
   echo ""
   echo "Connecting containers to mesh network..."
   connect_instances
+  write_bridge_info
   echo ""
   start_bridge
   echo ""
@@ -432,6 +473,7 @@ cmd_refresh() {
   fi
 
   connect_instances
+  write_bridge_info
   echo ""
 
   if docker ps --format '{{.Names}}' | grep -qx "$BRIDGE_CONTAINER"; then
