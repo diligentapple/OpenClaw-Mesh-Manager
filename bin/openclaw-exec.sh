@@ -42,14 +42,14 @@ if ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
 fi
 
 if [[ $# -eq 0 ]]; then
-  exec docker exec -it "$CONTAINER" bash
+  exec_docker exec -it "$CONTAINER" bash
 else
   # If the first argument is a system binary (bash, node, cat, …)
   # run it directly.  Otherwise treat it as an OpenClaw CLI subcommand
   # and route through the app entrypoint.
   if docker exec "$CONTAINER" sh -c "command -v \"$1\"" >/dev/null 2>&1; then
-    exec docker exec -it "$CONTAINER" "$@"
+    exec_docker exec -it "$CONTAINER" "$@"
   else
-    exec docker exec -it "$CONTAINER" node /app/dist/index.js "$@"
+    exec_docker exec -it "$CONTAINER" node /app/dist/index.js "$@"
   fi
 fi

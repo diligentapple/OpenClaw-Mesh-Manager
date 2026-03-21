@@ -19,4 +19,4 @@ if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER"; then
   exit 1
 fi
 
-exec docker logs -f "$@" "$CONTAINER"
+exec_docker logs -f "$@" "$CONTAINER"
