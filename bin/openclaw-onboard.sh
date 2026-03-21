@@ -50,15 +50,30 @@ echo "Restarting gateway to apply new configuration..."
 COMPOSE_FILE="${HOME_DIR}/openclaw${N}/docker-compose.yml"
 detect_compose_bin
 
-# Ensure NODE_OPTIONS and memory limit are sufficient.  Older compose files
-# may have lower values or be missing NODE_OPTIONS entirely.
+# Patch compose file: ensure NODE_OPTIONS is set and replace the heavyweight
+# node healthcheck with curl (spawning a full V8 runtime every 30s for a
+# health check was causing OOM on small instances).
 if [[ -f "$COMPOSE_FILE" ]]; then
   if ! grep -q 'NODE_OPTIONS' "$COMPOSE_FILE"; then
-    sed -i '/^      PATH:/a\      NODE_OPTIONS: "--max-old-space-size=768"' "$COMPOSE_FILE"
-  else
-    sed -i 's/--max-old-space-size=[0-9]*/--max-old-space-size=768/' "$COMPOSE_FILE"
+    sed -i '/^      PATH:/a\      NODE_OPTIONS: "--max-old-space-size=384"' "$COMPOSE_FILE"
   fi
-  sed -i 's/memory: 512M/memory: 1024M/' "$COMPOSE_FILE"
+  # Replace node-based healthcheck with lightweight curl
+  if grep -q '"node"' "$COMPOSE_FILE" && grep -q 'healthz' "$COMPOSE_FILE"; then
+    python3 -c "
+import re, sys
+text = open(sys.argv[1]).read()
+text = re.sub(
+    r'healthcheck:.*?start_period:\s*\S+',
+    '''healthcheck:
+      test: [\"CMD-SHELL\", \"curl -sf --max-time 5 http://127.0.0.1:18789/healthz || wget -qO- --timeout=5 http://127.0.0.1:18789/healthz\"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s''',
+    text, flags=re.DOTALL)
+open(sys.argv[1], 'w').write(text)
+" "$COMPOSE_FILE" 2>/dev/null || true
+  fi
 fi
 
 if [[ -f "$COMPOSE_FILE" ]]; then
