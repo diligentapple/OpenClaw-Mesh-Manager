@@ -73,6 +73,7 @@ Bridge endpoints:
   POST /send        Send message, wait for agent response
   POST /inject      Inject assistant message into a session
   POST /relay       Send to B, inject response into A's session
+  POST /announce    Manually trigger roster broadcast to all instances
 EOF
 }
 
@@ -156,7 +157,7 @@ generate_config() {
   mkdir -p "$MESH_DIR"
 
   # Build JSON manually (no jq dependency for writing)
-  local json='{"instances":{'
+  local json='{"networkName":"'"${NETWORK_NAME}"'","bridgeHost":"'"${BRIDGE_CONTAINER}"'","bridgePort":'"${BRIDGE_INTERNAL_PORT}"',"instances":{'
   local first=true
   for entry in $raw; do
     local num="${entry%%:*}"
@@ -377,12 +378,9 @@ cmd_start() {
   echo ""
   start_bridge
   echo ""
-  # Announce roster in background — gateways need ~30s to start listening
-  # so we defer rather than block the caller with a long sleep.
-  # Skipped with --no-announce (e.g. during openclaw-new before onboarding).
-  if [[ "$NO_ANNOUNCE" != true ]]; then
-    ( sleep 30 && announce_roster ) &
-  fi
+  # Roster announcement is now handled automatically by the bridge itself.
+  # When each instance connects via WebSocket, the bridge detects the state
+  # change and broadcasts an updated roster to all connected peers (debounced).
   echo ""
   echo "==============================="
   echo "Mesh is running! (network: $NETWORK_NAME)"
@@ -399,6 +397,7 @@ cmd_start() {
   echo "  POST /send        Send message, wait for agent response"
   echo "  POST /inject      Inject assistant message into a session"
   echo "  POST /relay       Send to B, inject response into A's session"
+  echo "  POST /announce    Manually trigger roster broadcast"
 }
 
 cmd_stop() {
@@ -483,10 +482,7 @@ cmd_refresh() {
     start_bridge
   fi
 
-  # Announce the updated roster in background — instances may still be starting
-  if [[ "$NO_ANNOUNCE" != true ]]; then
-    ( sleep 15 && announce_roster ) &
-  fi
+  # Roster announcement is handled automatically by the bridge on reconnect.
 }
 
 cmd_list() {
@@ -585,8 +581,7 @@ _refresh_network() {
     generate_config
     connect_instances
     docker restart "$BRIDGE_CONTAINER" >/dev/null 2>&1
-    sleep 3
-    announce_roster
+    # Roster is auto-broadcast by the bridge when instances reconnect.
   fi
 
   NETWORK_NAME="$saved_network"
