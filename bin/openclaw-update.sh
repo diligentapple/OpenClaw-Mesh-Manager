@@ -28,6 +28,12 @@ if sudo test -f "$CONFIG" 2>/dev/null; then
   echo "Config backed up to $backup"
 fi
 
+# Ensure NODE_OPTIONS is set so the gateway doesn't OOM inside the 512MB
+# container limit.  Older compose files may not have this.
+if ! grep -q 'NODE_OPTIONS' "$COMPOSE_FILE"; then
+  sed -i '/^      PATH:/a\      NODE_OPTIONS: "--max-old-space-size=384"' "$COMPOSE_FILE"
+fi
+
 # 2. Pull latest image
 echo "Pulling latest OpenClaw image..."
 docker pull ghcr.io/openclaw/openclaw:latest
