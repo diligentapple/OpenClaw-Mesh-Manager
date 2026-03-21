@@ -73,6 +73,7 @@ Bridge endpoints:
   POST /send        Send message, wait for agent response
   POST /inject      Inject assistant message into a session
   POST /relay       Send to B, inject response into A's session
+  POST /announce    Manually trigger roster broadcast to all instances
 EOF
 }
 
@@ -156,7 +157,7 @@ generate_config() {
   mkdir -p "$MESH_DIR"
 
   # Build JSON manually (no jq dependency for writing)
-  local json='{"instances":{'
+  local json='{"networkName":"'"${NETWORK_NAME}"'","bridgeHost":"'"${BRIDGE_CONTAINER}"'","bridgePort":'"${BRIDGE_INTERNAL_PORT}"',"instances":{'
   local first=true
   for entry in $raw; do
     local num="${entry%%:*}"
@@ -228,6 +229,46 @@ connect_instances() {
         && echo "  $container — connected to $NETWORK_NAME" \
         || echo "  $container — FAILED to connect"
     fi
+  done
+}
+
+# Write a .mesh-bridge file into each instance's data directory so the agent
+# inside the container can always discover the bridge endpoint — regardless of
+# whether the roster injection succeeded.
+write_bridge_info() {
+  for dir in "${HOME_DIR}"/openclaw[0-9]*/; do
+    [[ -d "$dir" ]] || continue
+    local base num inst_network
+    base="$(basename "$dir")"
+    num="${base#openclaw}"
+    [[ "$num" =~ ^[0-9]+$ ]] || continue
+
+    local net_file="${HOME_DIR}/.openclaw${num}/.mesh-network"
+    if [[ -f "$net_file" ]]; then
+      inst_network=$(head -1 "$net_file" 2>/dev/null | tr -d '[:space:]')
+    else
+      inst_network="openclaw-net"
+    fi
+    [[ "$inst_network" == "$NETWORK_NAME" ]] || continue
+
+    local data_dir="${HOME_DIR}/.openclaw${num}"
+    local info_file="${data_dir}/.mesh-bridge"
+    cat > "$info_file" <<MESHEOF
+# OpenClaw Mesh Bridge — auto-generated, do not edit
+# Query the bridge to discover peers and send messages.
+MESH_NETWORK=${NETWORK_NAME}
+BRIDGE_HOST=${BRIDGE_CONTAINER}
+BRIDGE_PORT=${BRIDGE_INTERNAL_PORT}
+BRIDGE_URL=http://${BRIDGE_CONTAINER}:${BRIDGE_INTERNAL_PORT}
+
+# Discovery:
+#   curl -s \${BRIDGE_URL}/instances
+#
+# Send a message to another instance:
+#   curl -s -X POST \${BRIDGE_URL}/send -H 'Content-Type: application/json' -d '{"to": N, "message": "..."}'
+MESHEOF
+    # Match ownership to the data dir (container uid 1000)
+    chown 1000:1000 "$info_file" 2>/dev/null || sudo chown 1000:1000 "$info_file" 2>/dev/null || true
   done
 }
 
@@ -333,12 +374,13 @@ cmd_start() {
   echo ""
   echo "Connecting containers to mesh network..."
   connect_instances
+  write_bridge_info
   echo ""
   start_bridge
   echo ""
-  # Announce roster in background — gateways need ~30s to start listening
-  # so we defer rather than block the caller with a long sleep.
-  ( sleep 30 && announce_roster ) &
+  # Roster announcement is now handled automatically by the bridge itself.
+  # When each instance connects via WebSocket, the bridge detects the state
+  # change and broadcasts an updated roster to all connected peers (debounced).
   echo ""
   echo "==============================="
   echo "Mesh is running! (network: $NETWORK_NAME)"
@@ -355,6 +397,7 @@ cmd_start() {
   echo "  POST /send        Send message, wait for agent response"
   echo "  POST /inject      Inject assistant message into a session"
   echo "  POST /relay       Send to B, inject response into A's session"
+  echo "  POST /announce    Manually trigger roster broadcast"
 }
 
 cmd_stop() {
@@ -429,6 +472,7 @@ cmd_refresh() {
   fi
 
   connect_instances
+  write_bridge_info
   echo ""
 
   if docker ps --format '{{.Names}}' | grep -qx "$BRIDGE_CONTAINER"; then
@@ -438,8 +482,7 @@ cmd_refresh() {
     start_bridge
   fi
 
-  # Announce the updated roster in background — instances may still be starting
-  ( sleep 15 && announce_roster ) &
+  # Roster announcement is handled automatically by the bridge on reconnect.
 }
 
 cmd_list() {
@@ -538,8 +581,7 @@ _refresh_network() {
     generate_config
     connect_instances
     docker restart "$BRIDGE_CONTAINER" >/dev/null 2>&1
-    sleep 3
-    announce_roster
+    # Roster is auto-broadcast by the bridge when instances reconnect.
   fi
 
   NETWORK_NAME="$saved_network"
@@ -695,6 +737,10 @@ cmd_leave() {
 CMD="${1:-}"
 shift 2>/dev/null || true
 
+# Global flag: skip roster announcement (used by openclaw-new when instances
+# aren't onboarded yet and have no active sessions to inject into).
+NO_ANNOUNCE=false
+
 # For 'join' and 'leave', the next arg is the instance number
 INSTANCE_ARG=""
 if [[ "$CMD" == "join" || "$CMD" == "leave" ]]; then
@@ -714,6 +760,12 @@ if [[ -n "${1:-}" && "${1:-}" != -* ]]; then
     exit 1
   fi
   NETWORK_NAME="$1"
+  shift
+fi
+
+# Optional flag: --no-announce
+if [[ "${1:-}" == "--no-announce" ]]; then
+  NO_ANNOUNCE=true
   shift
 fi
 

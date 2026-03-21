@@ -8,6 +8,9 @@ const crypto = require('crypto');
 const CONFIG_PATH = process.env.BRIDGE_CONFIG || '/data/config.json';
 const PORT = parseInt(process.env.BRIDGE_PORT || '3000', 10);
 const RESPONSE_TIMEOUT = parseInt(process.env.RESPONSE_TIMEOUT || '120000', 10);
+const ROSTER_DEBOUNCE_MS = parseInt(process.env.ROSTER_DEBOUNCE_MS || '15000', 10);
+const RECONNECT_BASE_MS = parseInt(process.env.RECONNECT_BASE_MS || '10000', 10);
+const RECONNECT_MAX_MS = parseInt(process.env.RECONNECT_MAX_MS || '120000', 10);
 
 // ---------------------------------------------------------------------------
 // Config
@@ -30,6 +33,10 @@ class GatewayClient {
     this.chatWaiters = [];             // [{matchFn, resolve, reject, timer, _id}]
     this._reqId = 0;
     this._connecting = null;
+    this._reconnectTimer = null;
+    this._reconnectAttempt = 0;
+    this._shouldReconnect = false;     // set to true once first connection succeeds
+    this.onStateChange = null;         // (instanceId, connected) => void
   }
 
   async ensureConnected() {
@@ -56,7 +63,9 @@ class GatewayClient {
       });
 
       ws.on('close', () => {
+        const wasConnected = this.connected;
         this.connected = false;
+        if (wasConnected && this.onStateChange) this.onStateChange(this.instanceId, false);
         for (const [, p] of this.pending) {
           clearTimeout(p.timer);
           p.reject(new Error('connection closed'));
@@ -67,6 +76,8 @@ class GatewayClient {
           w.reject(new Error('connection closed'));
         }
         this.chatWaiters = [];
+        // Auto-reconnect if this client was previously connected successfully
+        if (this._shouldReconnect) this._scheduleReconnect();
       });
 
       ws.on('message', (data) => {
@@ -90,7 +101,10 @@ class GatewayClient {
           }).then(() => {
             clearTimeout(timeout);
             this.connected = true;
+            this._shouldReconnect = true;
+            this._reconnectAttempt = 0;
             console.log(`[bridge] Connected to instance ${this.instanceId}`);
+            if (this.onStateChange) this.onStateChange(this.instanceId, true);
             resolve();
           }).catch((err) => {
             clearTimeout(timeout);
@@ -170,7 +184,33 @@ class GatewayClient {
     });
   }
 
+  _scheduleReconnect() {
+    if (this._reconnectTimer) return;
+    const delay = Math.min(
+      RECONNECT_BASE_MS * Math.pow(2, this._reconnectAttempt),
+      RECONNECT_MAX_MS,
+    );
+    this._reconnectAttempt++;
+    console.log(`[bridge] Will retry instance ${this.instanceId} in ${Math.round(delay / 1000)}s`);
+    this._reconnectTimer = setTimeout(() => {
+      this._reconnectTimer = null;
+      this.ensureConnected()
+        .then(() => {
+          console.log(`[bridge] Reconnected to instance ${this.instanceId}`);
+        })
+        .catch((err) => {
+          console.warn(`[bridge] Reconnect to instance ${this.instanceId} failed: ${err.message}`);
+          this._scheduleReconnect();
+        });
+    }, delay);
+  }
+
   close() {
+    this._shouldReconnect = false;
+    if (this._reconnectTimer) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
     if (this.ws) {
       try { this.ws.close(); } catch { /* ignore */ }
     }
@@ -199,9 +239,76 @@ async function getClient(instanceId) {
     inst.port || 18789,
     inst.token,
   );
-  await client.ensureConnected();
+  client.onStateChange = (id, connected) => {
+    console.log(`[bridge] Instance ${id} ${connected ? 'came online' : 'went offline'}`);
+    scheduleRosterBroadcast();
+  };
   clients.set(key, client);
+  await client.ensureConnected();
   return client;
+}
+
+// ---------------------------------------------------------------------------
+// Auto-Discovery: debounced roster broadcast on connect/disconnect
+// ---------------------------------------------------------------------------
+let _rosterTimer = null;
+
+function scheduleRosterBroadcast() {
+  if (_rosterTimer) clearTimeout(_rosterTimer);
+  _rosterTimer = setTimeout(() => {
+    _rosterTimer = null;
+    broadcastRoster().catch(err => {
+      console.error('[bridge] Roster broadcast failed:', err.message);
+    });
+  }, ROSTER_DEBOUNCE_MS);
+}
+
+async function broadcastRoster() {
+  const config = loadConfig();
+  const entries = Object.entries(config.instances);
+  if (entries.length === 0) return;
+
+  // Build roster text
+  const networkName = config.networkName || 'mesh';
+  const bridgeHost = config.bridgeHost || 'openclaw-bridge';
+  const bridgePort = config.bridgePort || 3000;
+
+  const lines = entries.map(([id, inst]) => {
+    const connected = clients.has(id) && clients.get(id).connected;
+    let line = `  • Instance ${id}`;
+    if (inst.name) line += ` (${inst.name})`;
+    if (inst.description) line += ` — ${inst.description}`;
+    line += connected ? '  [online]' : '  [offline]';
+    return line;
+  });
+
+  const roster =
+    `[OpenClaw Mesh Network: ${networkName}] Connected instances:\n` +
+    lines.join('\n') +
+    `\n\nTo message another instance: curl -s -X POST http://${bridgeHost}:${bridgePort}/send ` +
+    `-H "Content-Type: application/json" -d '{"to": N, "message": "..."}' ` +
+    `\nTo see all instances: curl -s http://${bridgeHost}:${bridgePort}/instances`;
+
+  console.log(`[bridge] Broadcasting roster to ${entries.length} instance(s)...`);
+
+  // Inject into every connected instance (best-effort, don't fail the whole batch)
+  const results = await Promise.allSettled(
+    entries.map(async ([id]) => {
+      const client = clients.get(id);
+      if (!client || !client.connected) return;
+      await client.request('chat.inject', {
+        sessionKey: 'main',
+        message: roster,
+        label: 'mesh-roster',
+      });
+      console.log(`[bridge]   Instance #${id}: roster delivered`);
+    })
+  );
+
+  const failed = results.filter(r => r.status === 'rejected');
+  if (failed.length > 0) {
+    console.warn(`[bridge]   ${failed.length} instance(s) unreachable for roster delivery`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -370,8 +477,15 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+    // ---- POST /announce ----
+    // Manually trigger a roster broadcast to all connected instances.
+    if (req.method === 'POST' && req.url === '/announce') {
+      await broadcastRoster();
+      return sendJson(res, 200, { ok: true, message: 'Roster broadcast complete' });
+    }
+
     sendJson(res, 404, {
-      error: 'Not found. Endpoints: GET /health, GET /instances, POST /send, POST /inject, POST /relay',
+      error: 'Not found. Endpoints: GET /health, GET /instances, POST /send, POST /inject, POST /relay, POST /announce',
     });
   } catch (err) {
     console.error('[bridge] Error:', err.message);
@@ -387,12 +501,23 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`[bridge] Listening on :${PORT}`);
   console.log(`[bridge] Config: ${CONFIG_PATH}`);
 
-  // Pre-connect to all configured instances
+  // Pre-connect to all configured instances.  Each successful connection
+  // triggers scheduleRosterBroadcast via onStateChange.  If an instance
+  // isn't up yet, we enable _shouldReconnect so the client keeps retrying
+  // with exponential backoff until it comes online.
   try {
     const config = loadConfig();
     for (const id of Object.keys(config.instances)) {
       getClient(id).catch((err) => {
         console.warn(`[bridge] Pre-connect to instance ${id} failed: ${err.message}`);
+        // Enable auto-reconnect even though initial connect failed — the
+        // instance may still be booting.  getClient stores the client in
+        // the pool before attempting connection, so it's available here.
+        const client = clients.get(id);
+        if (client && !client._reconnectTimer) {
+          client._shouldReconnect = true;
+          client._scheduleReconnect();
+        }
       });
     }
   } catch (e) {
