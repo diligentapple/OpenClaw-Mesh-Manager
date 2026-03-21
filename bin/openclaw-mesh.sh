@@ -338,7 +338,10 @@ cmd_start() {
   echo ""
   # Announce roster in background — gateways need ~30s to start listening
   # so we defer rather than block the caller with a long sleep.
-  ( sleep 30 && announce_roster ) &
+  # Skipped with --no-announce (e.g. during openclaw-new before onboarding).
+  if [[ "$NO_ANNOUNCE" != true ]]; then
+    ( sleep 30 && announce_roster ) &
+  fi
   echo ""
   echo "==============================="
   echo "Mesh is running! (network: $NETWORK_NAME)"
@@ -439,7 +442,9 @@ cmd_refresh() {
   fi
 
   # Announce the updated roster in background — instances may still be starting
-  ( sleep 15 && announce_roster ) &
+  if [[ "$NO_ANNOUNCE" != true ]]; then
+    ( sleep 15 && announce_roster ) &
+  fi
 }
 
 cmd_list() {
@@ -695,6 +700,10 @@ cmd_leave() {
 CMD="${1:-}"
 shift 2>/dev/null || true
 
+# Global flag: skip roster announcement (used by openclaw-new when instances
+# aren't onboarded yet and have no active sessions to inject into).
+NO_ANNOUNCE=false
+
 # For 'join' and 'leave', the next arg is the instance number
 INSTANCE_ARG=""
 if [[ "$CMD" == "join" || "$CMD" == "leave" ]]; then
@@ -714,6 +723,12 @@ if [[ -n "${1:-}" && "${1:-}" != -* ]]; then
     exit 1
   fi
   NETWORK_NAME="$1"
+  shift
+fi
+
+# Optional flag: --no-announce
+if [[ "${1:-}" == "--no-announce" ]]; then
+  NO_ANNOUNCE=true
   shift
 fi
 

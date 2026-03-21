@@ -393,6 +393,27 @@ ENVEOF
   if [[ "$MESH_NETWORK" != "openclaw-net" ]]; then
     echo "Network   : $MESH_NETWORK"
   fi
+
+  # Auto-start or refresh the mesh bridge so the network infrastructure is
+  # ready.  Pass --no-announce because instances aren't onboarded yet and
+  # there are no active sessions to inject the roster into.
+  local bridge_name="openclaw-bridge"
+  [[ "$MESH_NETWORK" == "openclaw-net" ]] || bridge_name="openclaw-bridge-${MESH_NETWORK}"
+  local MESH_CMD
+  MESH_CMD="$(command -v openclaw-mesh 2>/dev/null || echo "/usr/local/bin/openclaw-mesh")"
+  if [[ -x "$MESH_CMD" ]]; then
+    local mesh_args=()
+    [[ "$MESH_NETWORK" == "openclaw-net" ]] || mesh_args+=("$MESH_NETWORK")
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$bridge_name"; then
+      echo ""
+      echo "Mesh bridge running — refreshing..."
+      "$MESH_CMD" refresh "${mesh_args[@]+"${mesh_args[@]}"}" --no-announce
+    else
+      echo ""
+      echo "Starting mesh bridge ($MESH_NETWORK)..."
+      "$MESH_CMD" start "${mesh_args[@]+"${mesh_args[@]}"}" --no-announce
+    fi
+  fi
 }
 
 # ---------------------------------------------------------------------------
