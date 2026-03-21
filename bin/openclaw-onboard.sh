@@ -50,6 +50,12 @@ echo "Restarting gateway to apply new configuration..."
 COMPOSE_FILE="${HOME_DIR}/openclaw${N}/docker-compose.yml"
 detect_compose_bin
 
+# Ensure NODE_OPTIONS is set so the gateway doesn't OOM inside the 512MB
+# container limit.  Older compose files may not have this.
+if [[ -f "$COMPOSE_FILE" ]] && ! grep -q 'NODE_OPTIONS' "$COMPOSE_FILE"; then
+  sed -i '/^      PATH:/a\      NODE_OPTIONS: "--max-old-space-size=384"' "$COMPOSE_FILE"
+fi
+
 if [[ -f "$COMPOSE_FILE" ]]; then
   $COMPOSE_BIN --project-directory "${HOME_DIR}/openclaw${N}" \
     -f "$COMPOSE_FILE" up -d --force-recreate >/dev/null 2>&1 || true
