@@ -20,13 +20,11 @@ services:
       - "{{API_PORT}}:18789"
       - "{{WS_PORT}}:18790"
     init: true
-    deploy:
-      resources:
-        limits:
-          memory: 512M
+    mem_limit: 512m
     command:
       [
         "node",
+        "--max-old-space-size=384",
         "dist/index.js",
         "gateway",
         "--bind",
