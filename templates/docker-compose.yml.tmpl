@@ -9,7 +9,7 @@ services:
       TERM: xterm-256color
       NPM_CONFIG_PREFIX: /home/node/.npm-global
       PATH: /home/node/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-      NODE_OPTIONS: "--max-old-space-size=768"
+      NODE_OPTIONS: "--max-old-space-size=1536"
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
       TZ: {{TZ}}
@@ -20,11 +20,11 @@ services:
       - "{{API_PORT}}:18789"
       - "{{WS_PORT}}:18790"
     init: true
-    mem_limit: 1g
+    mem_limit: 2g
     command:
       [
         "node",
-        "--max-old-space-size=768",
+        "--max-old-space-size=1536",
         "dist/index.js",
         "gateway",
         "--bind",
