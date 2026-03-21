@@ -28,11 +28,14 @@ if sudo test -f "$CONFIG" 2>/dev/null; then
   echo "Config backed up to $backup"
 fi
 
-# Ensure NODE_OPTIONS is set so the gateway doesn't OOM inside the 512MB
-# container limit.  Older compose files may not have this.
+# Ensure NODE_OPTIONS and memory limit are sufficient.  Older compose files
+# may have lower values or be missing NODE_OPTIONS entirely.
 if ! grep -q 'NODE_OPTIONS' "$COMPOSE_FILE"; then
-  sed -i '/^      PATH:/a\      NODE_OPTIONS: "--max-old-space-size=384"' "$COMPOSE_FILE"
+  sed -i '/^      PATH:/a\      NODE_OPTIONS: "--max-old-space-size=768"' "$COMPOSE_FILE"
+else
+  sed -i 's/--max-old-space-size=[0-9]*/--max-old-space-size=768/' "$COMPOSE_FILE"
 fi
+sed -i 's/memory: 512M/memory: 1024M/' "$COMPOSE_FILE"
 
 # 2. Pull latest image
 echo "Pulling latest OpenClaw image..."
