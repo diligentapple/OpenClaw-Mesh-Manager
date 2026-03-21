@@ -8,7 +8,9 @@ const crypto = require('crypto');
 const CONFIG_PATH = process.env.BRIDGE_CONFIG || '/data/config.json';
 const PORT = parseInt(process.env.BRIDGE_PORT || '3000', 10);
 const RESPONSE_TIMEOUT = parseInt(process.env.RESPONSE_TIMEOUT || '120000', 10);
-const ROSTER_DEBOUNCE_MS = parseInt(process.env.ROSTER_DEBOUNCE_MS || '5000', 10);
+const ROSTER_DEBOUNCE_MS = parseInt(process.env.ROSTER_DEBOUNCE_MS || '15000', 10);
+const RECONNECT_BASE_MS = parseInt(process.env.RECONNECT_BASE_MS || '10000', 10);
+const RECONNECT_MAX_MS = parseInt(process.env.RECONNECT_MAX_MS || '120000', 10);
 
 // ---------------------------------------------------------------------------
 // Config
@@ -31,6 +33,9 @@ class GatewayClient {
     this.chatWaiters = [];             // [{matchFn, resolve, reject, timer, _id}]
     this._reqId = 0;
     this._connecting = null;
+    this._reconnectTimer = null;
+    this._reconnectAttempt = 0;
+    this._shouldReconnect = false;     // set to true once first connection succeeds
     this.onStateChange = null;         // (instanceId, connected) => void
   }
 
@@ -71,6 +76,8 @@ class GatewayClient {
           w.reject(new Error('connection closed'));
         }
         this.chatWaiters = [];
+        // Auto-reconnect if this client was previously connected successfully
+        if (this._shouldReconnect) this._scheduleReconnect();
       });
 
       ws.on('message', (data) => {
@@ -94,6 +101,8 @@ class GatewayClient {
           }).then(() => {
             clearTimeout(timeout);
             this.connected = true;
+            this._shouldReconnect = true;
+            this._reconnectAttempt = 0;
             console.log(`[bridge] Connected to instance ${this.instanceId}`);
             if (this.onStateChange) this.onStateChange(this.instanceId, true);
             resolve();
@@ -175,7 +184,33 @@ class GatewayClient {
     });
   }
 
+  _scheduleReconnect() {
+    if (this._reconnectTimer) return;
+    const delay = Math.min(
+      RECONNECT_BASE_MS * Math.pow(2, this._reconnectAttempt),
+      RECONNECT_MAX_MS,
+    );
+    this._reconnectAttempt++;
+    console.log(`[bridge] Will retry instance ${this.instanceId} in ${Math.round(delay / 1000)}s`);
+    this._reconnectTimer = setTimeout(() => {
+      this._reconnectTimer = null;
+      this.ensureConnected()
+        .then(() => {
+          console.log(`[bridge] Reconnected to instance ${this.instanceId}`);
+        })
+        .catch((err) => {
+          console.warn(`[bridge] Reconnect to instance ${this.instanceId} failed: ${err.message}`);
+          this._scheduleReconnect();
+        });
+    }, delay);
+  }
+
   close() {
+    this._shouldReconnect = false;
+    if (this._reconnectTimer) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
     if (this.ws) {
       try { this.ws.close(); } catch { /* ignore */ }
     }
@@ -208,8 +243,8 @@ async function getClient(instanceId) {
     console.log(`[bridge] Instance ${id} ${connected ? 'came online' : 'went offline'}`);
     scheduleRosterBroadcast();
   };
-  await client.ensureConnected();
   clients.set(key, client);
+  await client.ensureConnected();
   return client;
 }
 
@@ -466,14 +501,23 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`[bridge] Listening on :${PORT}`);
   console.log(`[bridge] Config: ${CONFIG_PATH}`);
 
-  // Pre-connect to all configured instances (each successful connection
-  // triggers scheduleRosterBroadcast via onStateChange, so peers are
-  // announced automatically as they come online — no shell-side sleep needed).
+  // Pre-connect to all configured instances.  Each successful connection
+  // triggers scheduleRosterBroadcast via onStateChange.  If an instance
+  // isn't up yet, we enable _shouldReconnect so the client keeps retrying
+  // with exponential backoff until it comes online.
   try {
     const config = loadConfig();
     for (const id of Object.keys(config.instances)) {
       getClient(id).catch((err) => {
         console.warn(`[bridge] Pre-connect to instance ${id} failed: ${err.message}`);
+        // Enable auto-reconnect even though initial connect failed — the
+        // instance may still be booting.  getClient stores the client in
+        // the pool before attempting connection, so it's available here.
+        const client = clients.get(id);
+        if (client && !client._reconnectTimer) {
+          client._shouldReconnect = true;
+          client._scheduleReconnect();
+        }
       });
     }
   } catch (e) {
