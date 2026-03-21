@@ -9,7 +9,7 @@ services:
       TERM: xterm-256color
       NPM_CONFIG_PREFIX: /home/node/.npm-global
       PATH: /home/node/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-      NODE_OPTIONS: "--max-old-space-size=384"
+      NODE_OPTIONS: "--max-old-space-size=768"
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
       TZ: {{TZ}}
@@ -23,7 +23,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 1024M
     command:
       [
         "node",
