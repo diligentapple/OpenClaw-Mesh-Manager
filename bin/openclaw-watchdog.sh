@@ -129,6 +129,10 @@ check_instance() {
 
   echo "$(date -Iseconds) [watchdog] Instance #$n: restarting..."
 
+  # Remove stale lock/pid files that survive container restarts
+  local data_dir="${HOME_DIR}/.openclaw${n}"
+  rm -f "${data_dir}"/*.lock "${data_dir}"/*.pid 2>/dev/null || true
+
   if [[ -f "$compose_file" ]]; then
     $COMPOSE_BIN --project-directory "$instance_dir" \
       -f "$compose_file" up -d --force-recreate 2>&1 | grep -v "^$" || true
