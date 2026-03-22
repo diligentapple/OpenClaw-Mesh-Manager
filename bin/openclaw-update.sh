@@ -29,11 +29,11 @@ if sudo test -f "$CONFIG" 2>/dev/null; then
 fi
 
 # Patch existing compose files to fix OOM issues (same as openclaw-onboard)
-python3 -c "
+python3 - "$COMPOSE_FILE" <<'PYEOF' || true
 import re, sys
 text = open(sys.argv[1]).read()
 if '--max-old-space-size' not in text:
-    text = text.replace('\"node\",\n        \"dist/index.js\"', '\"node\",\n        \"--max-old-space-size=1536\",\n        \"dist/index.js\"')
+    text = text.replace('"node",\n        "dist/index.js"', '"node",\n        "--max-old-space-size=1536",\n        "dist/index.js"')
 else:
     text = re.sub(r'--max-old-space-size=\d+', '--max-old-space-size=1536', text)
 if 'deploy:' in text:
@@ -43,43 +43,44 @@ if 'mem_limit' in text:
 else:
     text = text.replace('\n    init: true\n', '\n    init: true\n    mem_limit: 2g\n')
 if 'NODE_OPTIONS' not in text:
-    text = text.replace('      PATH:', '      NODE_OPTIONS: \"--max-old-space-size=1536\"\n      PATH:')
+    text = text.replace('      PATH:', '      NODE_OPTIONS: "--max-old-space-size=1536"\n      PATH:')
 else:
-    text = re.sub(r'NODE_OPTIONS:.*', 'NODE_OPTIONS: \"--max-old-space-size=1536\"', text)
+    text = re.sub(r'NODE_OPTIONS:.*', 'NODE_OPTIONS: "--max-old-space-size=1536"', text)
 text = re.sub(
     r'healthcheck:.*?start_period:\s*\S+',
-    '''healthcheck:
-      test: [\"CMD-SHELL\", \"curl -sf --max-time 5 http://127.0.0.1:18789/healthz || wget -qO- --timeout=5 http://127.0.0.1:18789/healthz\"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 45s''',
+    'healthcheck:\n'
+    '      test: ["CMD-SHELL", "curl -sf --max-time 5 http://127.0.0.1:18789/healthz || wget -qO- --timeout=5 http://127.0.0.1:18789/healthz"]\n'
+    '      interval: 30s\n'
+    '      timeout: 10s\n'
+    '      retries: 3\n'
+    '      start_period: 45s',
     text, flags=re.DOTALL)
+
+ENTRYPOINT_BLOCK = (
+    'entrypoint:\n'
+    '      [\n'
+    '        "/bin/sh",\n'
+    '        "-c",\n'
+    '        "rm -f /home/node/.openclaw/*.lock /home/node/.openclaw/*.pid 2>/dev/null;'
+    ' START=$$(date +%s);'
+    ' node --max-old-space-size=1536 dist/index.js gateway'
+    ' --bind ${OPENCLAW_GATEWAY_BIND:-loopback} --port 18789 --allow-unconfigured;'
+    ' EXIT=$$?; ELAPSED=$$(($$(date +%s) - START));'
+    ' if [ $$ELAPSED -lt 10 ]; then'
+    " echo '[openclaw] Exited after '$$ELAPSED's (code '$$EXIT'). Waiting 30s...'; sleep 30;"
+    ' fi; exit $$EXIT"\n'
+    '      ]'
+)
+
 # 5. Convert command: to entrypoint: with stale lock cleanup and crash guard
-text = re.sub(
-    r'command:\s*\[.*?\]',
-    '''entrypoint:
-      [
-        \"/bin/sh\",
-        \"-c\",
-        \"rm -f /home/node/.openclaw/*.lock /home/node/.openclaw/*.pid 2>/dev/null; START=\\$(date +%s); node --max-old-space-size=1536 dist/index.js gateway --bind \${OPENCLAW_GATEWAY_BIND:-loopback} --port 18789 --allow-unconfigured; EXIT=\\$?; ELAPSED=\\$((\\$(date +%s) - START)); if [ \\$ELAPSED -lt 10 ]; then echo '[openclaw] Process exited after \\${ELAPSED}s (code \\$EXIT). Waiting 30s to prevent restart storm...'; sleep 30; fi; exit \\$EXIT\"
-      ]''',
-    text, flags=re.DOTALL)
+text = re.sub(r'command:\s*\[.*?\]', ENTRYPOINT_BLOCK, text, flags=re.DOTALL)
 # 6. Upgrade existing entrypoint: blocks that lack the crash guard
-if 'entrypoint:' in text and 'restart storm' not in text:
-    text = re.sub(
-        r'entrypoint:\s*\[.*?\]',
-        '''entrypoint:
-      [
-        \"/bin/sh\",
-        \"-c\",
-        \"rm -f /home/node/.openclaw/*.lock /home/node/.openclaw/*.pid 2>/dev/null; START=\\$(date +%s); node --max-old-space-size=1536 dist/index.js gateway --bind \${OPENCLAW_GATEWAY_BIND:-loopback} --port 18789 --allow-unconfigured; EXIT=\\$?; ELAPSED=\\$((\\$(date +%s) - START)); if [ \\$ELAPSED -lt 10 ]; then echo '[openclaw] Process exited after \\${ELAPSED}s (code \\$EXIT). Waiting 30s to prevent restart storm...'; sleep 30; fi; exit \\$EXIT\"
-      ]''',
-        text, flags=re.DOTALL)
+if 'entrypoint:' in text and 'restart storm' not in text and 'Waiting 30s' not in text:
+    text = re.sub(r'entrypoint:\s*\[.*?\]', ENTRYPOINT_BLOCK, text, flags=re.DOTALL)
 # 7. Fix restart policy: unless-stopped -> on-failure:5 to prevent infinite loops
-text = re.sub(r'restart:\s*unless-stopped', 'restart: \"on-failure:5\"', text)
+text = re.sub(r'restart:\s*unless-stopped', 'restart: "on-failure:5"', text)
 open(sys.argv[1], 'w').write(text)
-" "$COMPOSE_FILE" 2>/dev/null || true
+PYEOF
 
 # Remove stale lock/pid files from data dir before starting
 rm -f "${DATA_DIR}"/*.lock "${DATA_DIR}"/*.pid 2>/dev/null || true
