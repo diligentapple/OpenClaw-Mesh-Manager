@@ -11,6 +11,7 @@ const RESPONSE_TIMEOUT = parseInt(process.env.RESPONSE_TIMEOUT || '120000', 10);
 const ROSTER_DEBOUNCE_MS = parseInt(process.env.ROSTER_DEBOUNCE_MS || '15000', 10);
 const RECONNECT_BASE_MS = parseInt(process.env.RECONNECT_BASE_MS || '10000', 10);
 const RECONNECT_MAX_MS = parseInt(process.env.RECONNECT_MAX_MS || '120000', 10);
+const ROSTER_READY_DELAY_MS = parseInt(process.env.ROSTER_READY_DELAY_MS || '60000', 10);
 
 // ---------------------------------------------------------------------------
 // Config
@@ -103,6 +104,7 @@ class GatewayClient {
             this.connected = true;
             this._shouldReconnect = true;
             this._reconnectAttempt = 0;
+            this._connectedAt = Date.now();
             console.log(`[bridge] Connected to instance ${this.instanceId}`);
             if (this.onStateChange) this.onStateChange(this.instanceId, true);
             resolve();
@@ -227,7 +229,14 @@ async function getClient(instanceId) {
   let client = clients.get(key);
   if (client && client.connected) return client;
 
-  if (client) { client.close(); clients.delete(key); }
+  // If a client exists but isn't connected, let its reconnect cycle continue
+  // rather than destroying and recreating it (which kills the backoff state).
+  // Only create a new client if none exists at all.
+  if (client) {
+    // Client exists but not connected — try to connect it
+    await client.ensureConnected();
+    return client;
+  }
 
   const config = loadConfig();
   const inst = config.instances[key];
@@ -241,6 +250,11 @@ async function getClient(instanceId) {
   );
   client.onStateChange = (id, connected) => {
     console.log(`[bridge] Instance ${id} ${connected ? 'came online' : 'went offline'}`);
+    if (connected) {
+      // Track when the instance came online so we can delay roster
+      // injection until the gateway is fully ready.
+      client._connectedAt = Date.now();
+    }
     scheduleRosterBroadcast();
   };
   clients.set(key, client);
@@ -252,6 +266,7 @@ async function getClient(instanceId) {
 // Auto-Discovery: debounced roster broadcast on connect/disconnect
 // ---------------------------------------------------------------------------
 let _rosterTimer = null;
+let _rosterFollowUpTimer = null;
 
 function scheduleRosterBroadcast() {
   if (_rosterTimer) clearTimeout(_rosterTimer);
@@ -260,6 +275,18 @@ function scheduleRosterBroadcast() {
     broadcastRoster().catch(err => {
       console.error('[bridge] Roster broadcast failed:', err.message);
     });
+
+    // Schedule a follow-up broadcast after newly connected instances have
+    // had time to fully initialize (ROSTER_READY_DELAY_MS).  The first
+    // broadcast skips them; this one will deliver the roster.
+    if (!_rosterFollowUpTimer) {
+      _rosterFollowUpTimer = setTimeout(() => {
+        _rosterFollowUpTimer = null;
+        broadcastRoster().catch(err => {
+          console.error('[bridge] Follow-up roster broadcast failed:', err.message);
+        });
+      }, ROSTER_READY_DELAY_MS + 5000);
+    }
   }, ROSTER_DEBOUNCE_MS);
 }
 
@@ -291,11 +318,20 @@ async function broadcastRoster() {
 
   console.log(`[bridge] Broadcasting roster to ${entries.length} instance(s)...`);
 
-  // Inject into every connected instance (best-effort, don't fail the whole batch)
+  // Inject into every connected instance (best-effort, don't fail the whole batch).
+  // Skip instances that connected recently — the gateway needs time to finish
+  // initializing before it can safely handle chat.inject.  Injecting too early
+  // can crash the gateway, creating a restart → reconnect → inject → crash loop.
+  const now = Date.now();
   const results = await Promise.allSettled(
     entries.map(async ([id]) => {
       const client = clients.get(id);
       if (!client || !client.connected) return;
+      const connectedAt = client._connectedAt || 0;
+      if (now - connectedAt < ROSTER_READY_DELAY_MS) {
+        console.log(`[bridge]   Instance #${id}: skipping roster (connected ${Math.round((now - connectedAt) / 1000)}s ago, waiting ${Math.round(ROSTER_READY_DELAY_MS / 1000)}s)`);
+        return;
+      }
       await client.request('chat.inject', {
         sessionKey: 'main',
         message: roster,
