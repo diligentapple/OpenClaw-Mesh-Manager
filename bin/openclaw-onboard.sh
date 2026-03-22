@@ -31,6 +31,13 @@ IMAGE=$(docker inspect --format '{{.Config.Image}}' "$CONTAINER" 2>/dev/null || 
 
 echo "Running onboarding for instance #$N..."
 
+# Stop the gateway container to free memory for the onboarding wizard.
+# Both share the same data volume, and the gateway will be recreated
+# afterward anyway.  On small servers (2-4GB), running the gateway +
+# onboard container simultaneously OOMs the host.
+echo "Stopping gateway to free memory for onboarding..."
+docker stop "$CONTAINER" >/dev/null 2>&1 || true
+
 # Run onboarding in a *separate* one-off container that shares the data volume.
 # This avoids the gateway's file-watcher restarting the container mid-wizard and
 # killing the interactive exec session (the root cause of the "exits after
