@@ -160,20 +160,7 @@ done
 # Enable insecure auth and host-header origin fallback so the gateway
 # can run with BIND=lan (required for mesh networking) without needing
 # explicit allowedOrigins.
-CONFIG="${DATA_DIR}/openclaw.json"
-if sudo test -f "$CONFIG" 2>/dev/null; then
-  local_tmp=$(mktemp)
-  if sudo jq '
-    .gateway.controlUi.allowInsecureAuth = true |
-    .gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback = true
-  ' "$CONFIG" > "$local_tmp" && jq empty "$local_tmp" 2>/dev/null; then
-    owner=$(sudo stat -c '%u:%g' "$CONFIG")
-    sudo mv "$local_tmp" "$CONFIG"
-    sudo chown "$owner" "$CONFIG"
-  else
-    rm -f "$local_tmp"
-  fi
-fi
+enable_lan_gateway_config "$DATA_DIR"
 
 # Switch gateway binding to lan now that the config has the required
 # origin settings.  This allows the mesh bridge to reach the gateway.

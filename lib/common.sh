@@ -38,6 +38,51 @@ exec_docker() {
   fi
 }
 
+# --- LAN gateway config ---------------------------------------------------
+# When the gateway binds to lan (non-loopback), it requires origin settings
+# in openclaw.json.  This helper patches the config so the gateway can start.
+# Call this whenever BIND is switched to lan (mesh join, onboard, etc.).
+
+enable_lan_gateway_config() {
+  local data_dir="$1"
+  local config="${data_dir}/openclaw.json"
+
+  # Config may not exist yet (pre-onboarding).  In that case, create a
+  # minimal one with just the required origin settings.
+  if sudo test -f "$config" 2>/dev/null; then
+    local tmp
+    tmp=$(mktemp)
+    if sudo jq '
+      .gateway.controlUi.allowInsecureAuth = true |
+      .gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback = true
+    ' "$config" > "$tmp" && jq empty "$tmp" 2>/dev/null; then
+      local owner
+      owner=$(sudo stat -c '%u:%g' "$config")
+      sudo mv "$tmp" "$config"
+      sudo chown "$owner" "$config"
+    else
+      rm -f "$tmp"
+    fi
+  else
+    # No config yet — write a minimal one so the gateway can start with BIND=lan
+    local tmp
+    tmp=$(mktemp)
+    cat > "$tmp" <<'MINJSON'
+{
+  "gateway": {
+    "controlUi": {
+      "allowInsecureAuth": true,
+      "dangerouslyAllowHostHeaderOriginFallback": true
+    }
+  }
+}
+MINJSON
+    sudo cp "$tmp" "$config"
+    sudo chown 1000:1000 "$config"
+    rm -f "$tmp"
+  fi
+}
+
 # --- Compose binary detection ---------------------------------------------
 # Sets COMPOSE_BIN to "docker compose" (plugin) or "docker-compose" (legacy).
 # Call explicitly in scripts that need compose; not run at source time.

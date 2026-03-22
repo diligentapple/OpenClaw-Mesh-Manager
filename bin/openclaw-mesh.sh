@@ -632,6 +632,9 @@ cmd_join() {
     sed -i 's/^OPENCLAW_GATEWAY_BIND=.*/OPENCLAW_GATEWAY_BIND=lan/' "$env_file"
   fi
 
+  # Patch openclaw.json with origin fallback settings required for BIND=lan
+  enable_lan_gateway_config "$data_dir"
+
   # Update the docker-compose.yml network references
   if [[ -f "$compose_file" ]]; then
     # Replace old network references with new (normal join-to-join case)
