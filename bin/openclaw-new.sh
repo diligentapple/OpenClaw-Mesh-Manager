@@ -245,9 +245,11 @@ apply_preset() {
   rm -f "$tmp"
 
   # If the preset sets bind=lan, update the .env so the gateway command matches
+  # and patch openclaw.json with origin settings required for non-loopback binding
   local instance_dir="${HOME_DIR}/openclaw${n}"
   if grep -q '"bind": "lan"' "$preset_file"; then
     sed -i 's/^OPENCLAW_GATEWAY_BIND=.*/OPENCLAW_GATEWAY_BIND=lan/' "${instance_dir}/.env"
+    enable_lan_gateway_config "$data_dir"
   fi
 
   # Ensure the shared mesh network exists (idempotent)
