@@ -82,6 +82,18 @@ text = re.sub(r'restart:\s*unless-stopped', 'restart: "on-failure:5"', text)
 open(sys.argv[1], 'w').write(text)
 PYEOF
 
+# Stop ALL other gateway containers to free memory.
+# OpenClaw needs ~760MB heap; running doctor via docker exec spawns a second
+# node process inside the container, so even one gateway + doctor = ~1.5GB.
+# With other gateways running too, the host OOMs.
+echo "Stopping other gateways to free memory..."
+STOPPED_GATEWAYS=()
+for cname in $(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^openclaw[0-9]+-gateway$' || true); do
+  [[ "$cname" == "$CONTAINER" ]] && continue
+  docker stop "$cname" >/dev/null 2>&1 || true
+  STOPPED_GATEWAYS+=("$cname")
+done
+
 # Remove stale lock/pid files from data dir before starting
 rm -f "${DATA_DIR}"/*.lock "${DATA_DIR}"/*.pid 2>/dev/null || true
 
@@ -89,10 +101,23 @@ rm -f "${DATA_DIR}"/*.lock "${DATA_DIR}"/*.pid 2>/dev/null || true
 echo "Pulling latest OpenClaw image..."
 docker pull ghcr.io/openclaw/openclaw:latest
 
-# 3. Recreate container with new image
+# 3. Run doctor in a one-off container (NOT docker exec) to avoid running
+#    two node processes simultaneously inside the gateway container.
+echo "Running config migration (doctor)..."
+docker run --rm \
+  --init \
+  --memory 2g \
+  --no-healthcheck \
+  -e HOME=/home/node \
+  -e "NODE_OPTIONS=--max-old-space-size=1536" \
+  -v "${DATA_DIR}:/home/node/.openclaw" \
+  ghcr.io/openclaw/openclaw:latest \
+  node dist/index.js doctor 2>/dev/null || true
+
+# 4. Start the updated container
 $COMPOSE_BIN -f "$COMPOSE_FILE" up -d --force-recreate
 
-# 4. Wait for container to be ready
+# 5. Wait for container to be ready and verify health
 echo "Waiting for container to start..."
 local_tries=0
 while ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER" && [[ $local_tries -lt 15 ]]; do
@@ -100,24 +125,17 @@ while ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER" && [[ $local_tri
   ((local_tries++)) || true
 done
 
-# 5. Run doctor to handle config migrations
-if docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
-  echo "Running config migration (doctor)..."
-  docker exec "$CONTAINER" node /app/dist/index.js doctor 2>/dev/null || true
-
-  # 6. Restart gateway to pick up migrated config
-  echo "Restarting gateway..."
-  docker restart "$CONTAINER" >/dev/null 2>&1
-
-  # 7. Verify health
-  sleep 3
-  API_PORT=$(docker port "$CONTAINER" 18789/tcp 2>/dev/null | head -1 | awk -F: '{print $NF}' || true)
-  if [[ -n "$API_PORT" ]] && curl -sf "http://127.0.0.1:${API_PORT}/healthz" >/dev/null 2>&1; then
-    echo "Instance #$N updated and healthy."
-  else
-    echo "Instance #$N updated but health check failed."
-    echo "  Check logs: openclaw-logs $N --tail 20"
-  fi
+sleep 3
+API_PORT=$(docker port "$CONTAINER" 18789/tcp 2>/dev/null | head -1 | awk -F: '{print $NF}' || true)
+if [[ -n "$API_PORT" ]] && curl -sf "http://127.0.0.1:${API_PORT}/healthz" >/dev/null 2>&1; then
+  echo "Instance #$N updated and healthy."
 else
-  echo "Warning: container did not start. Check: openclaw-logs $N"
+  echo "Instance #$N updated but health check failed."
+  echo "  Check logs: openclaw-logs $N --tail 20"
 fi
+
+# 6. Restart other gateways that were stopped
+for cname in "${STOPPED_GATEWAYS[@]+"${STOPPED_GATEWAYS[@]}"}"; do
+  echo "Restarting $cname..."
+  docker start "$cname" >/dev/null 2>&1 || true
+done
