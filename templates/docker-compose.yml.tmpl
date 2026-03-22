@@ -9,7 +9,7 @@ services:
       TERM: xterm-256color
       NPM_CONFIG_PREFIX: /home/node/.npm-global
       PATH: /home/node/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-      NODE_OPTIONS: "--max-old-space-size=768"
+      NODE_OPTIONS: "--max-old-space-size=1536"
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
       TZ: {{TZ}}
@@ -20,12 +20,12 @@ services:
       - "{{API_PORT}}:18789"
       - "{{WS_PORT}}:18790"
     init: true
-    mem_limit: 1g
+    mem_limit: 2g
     entrypoint:
       [
         "/bin/sh",
         "-c",
-        "rm -f /home/node/.openclaw/*.lock /home/node/.openclaw/*.pid /home/node/.openclaw/gateway.lock 2>/dev/null; START=$$(date +%s); node --max-old-space-size=768 dist/index.js gateway --bind ${OPENCLAW_GATEWAY_BIND:-loopback} --port 18789 --allow-unconfigured; EXIT=$$?; ELAPSED=$$(($$( date +%s) - START)); if [ $$ELAPSED -lt 10 ]; then echo '[openclaw] Process exited after '$$ELAPSED's (code '$$EXIT'). Waiting 30s to prevent restart storm...'; sleep 30; fi; exit $$EXIT"
+        "rm -f /home/node/.openclaw/*.lock /home/node/.openclaw/*.pid /home/node/.openclaw/gateway.lock 2>/dev/null; START=$$(date +%s); node --max-old-space-size=1536 dist/index.js gateway --bind ${OPENCLAW_GATEWAY_BIND:-loopback} --port 18789 --allow-unconfigured; EXIT=$$?; ELAPSED=$$(($$( date +%s) - START)); if [ $$ELAPSED -lt 10 ]; then echo '[openclaw] Process exited after '$$ELAPSED's (code '$$EXIT'). Waiting 30s to prevent restart storm...'; sleep 30; fi; exit $$EXIT"
       ]
     networks:
       - default

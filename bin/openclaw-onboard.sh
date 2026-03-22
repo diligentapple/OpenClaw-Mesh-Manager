@@ -48,11 +48,11 @@ done
 # channel selection" bug).
 docker run --rm -it \
   --init \
-  --memory 1g \
+  --memory 2g \
   -e HOME=/home/node \
   -e TERM=xterm-256color \
   -e NPM_CONFIG_PREFIX=/home/node/.npm-global \
-  -e "NODE_OPTIONS=--max-old-space-size=768" \
+  -e "NODE_OPTIONS=--max-old-space-size=1536" \
   -e PATH=/home/node/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   --no-healthcheck \
   -v "${DATA_DIR}:/home/node/.openclaw" \
@@ -66,7 +66,7 @@ COMPOSE_FILE="${HOME_DIR}/openclaw${N}/docker-compose.yml"
 detect_compose_bin
 
 # Patch existing compose files to fix OOM issues:
-#  1. Add/update --max-old-space-size=768 in node command (entrypoint can override NODE_OPTIONS env)
+#  1. Add/update --max-old-space-size=1536 in node command (entrypoint can override NODE_OPTIONS env)
 #  2. Replace deploy.resources (swarm-only) with mem_limit (works standalone)
 #  3. Replace node-based healthcheck with lightweight curl/wget
 if [[ -f "$COMPOSE_FILE" ]]; then
@@ -75,22 +75,22 @@ import re, sys
 text = open(sys.argv[1]).read()
 # 1. Add or update --max-old-space-size in node command
 if '--max-old-space-size' not in text:
-    text = text.replace('"node",\n        "dist/index.js"', '"node",\n        "--max-old-space-size=768",\n        "dist/index.js"')
+    text = text.replace('"node",\n        "dist/index.js"', '"node",\n        "--max-old-space-size=1536",\n        "dist/index.js"')
 else:
-    text = re.sub(r'--max-old-space-size=\d+', '--max-old-space-size=768', text)
+    text = re.sub(r'--max-old-space-size=\d+', '--max-old-space-size=1536', text)
 # 2. Replace deploy.resources block with mem_limit
 if 'deploy:' in text:
-    text = re.sub(r'\n    deploy:\n      resources:\n        limits:\n          memory:\s*\S+\n', '\n    mem_limit: 1g\n', text)
+    text = re.sub(r'\n    deploy:\n      resources:\n        limits:\n          memory:\s*\S+\n', '\n    mem_limit: 2g\n', text)
 # Update existing mem_limit or add it
 if 'mem_limit' in text:
-    text = re.sub(r'mem_limit:\s*\S+', 'mem_limit: 1g', text)
+    text = re.sub(r'mem_limit:\s*\S+', 'mem_limit: 2g', text)
 else:
-    text = text.replace('\n    init: true\n', '\n    init: true\n    mem_limit: 1g\n')
+    text = text.replace('\n    init: true\n', '\n    init: true\n    mem_limit: 2g\n')
 # 3. Add or update NODE_OPTIONS env
 if 'NODE_OPTIONS' not in text:
-    text = text.replace('      PATH:', '      NODE_OPTIONS: "--max-old-space-size=768"\n      PATH:')
+    text = text.replace('      PATH:', '      NODE_OPTIONS: "--max-old-space-size=1536"\n      PATH:')
 else:
-    text = re.sub(r'NODE_OPTIONS:.*', 'NODE_OPTIONS: "--max-old-space-size=768"', text)
+    text = re.sub(r'NODE_OPTIONS:.*', 'NODE_OPTIONS: "--max-old-space-size=1536"', text)
 # 4. Replace node-based healthcheck with curl/wget
 text = re.sub(
     r'healthcheck:.*?start_period:\s*\S+',
@@ -109,7 +109,7 @@ ENTRYPOINT_BLOCK = (
     '        "-c",\n'
     '        "rm -f /home/node/.openclaw/*.lock /home/node/.openclaw/*.pid 2>/dev/null;'
     ' START=$$(date +%s);'
-    ' node --max-old-space-size=768 dist/index.js gateway'
+    ' node --max-old-space-size=1536 dist/index.js gateway'
     ' --bind ${OPENCLAW_GATEWAY_BIND:-loopback} --port 18789 --allow-unconfigured;'
     ' EXIT=$$?; ELAPSED=$$(($$(date +%s) - START));'
     ' if [ $$ELAPSED -lt 10 ]; then'
