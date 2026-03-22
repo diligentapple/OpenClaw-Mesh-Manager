@@ -33,19 +33,19 @@ python3 - "$COMPOSE_FILE" <<'PYEOF' || true
 import re, sys
 text = open(sys.argv[1]).read()
 if '--max-old-space-size' not in text:
-    text = text.replace('"node",\n        "dist/index.js"', '"node",\n        "--max-old-space-size=1536",\n        "dist/index.js"')
+    text = text.replace('"node",\n        "dist/index.js"', '"node",\n        "--max-old-space-size=512",\n        "dist/index.js"')
 else:
-    text = re.sub(r'--max-old-space-size=\d+', '--max-old-space-size=1536', text)
+    text = re.sub(r'--max-old-space-size=\d+', '--max-old-space-size=512', text)
 if 'deploy:' in text:
-    text = re.sub(r'\n    deploy:\n      resources:\n        limits:\n          memory:\s*\S+\n', '\n    mem_limit: 2g\n', text)
+    text = re.sub(r'\n    deploy:\n      resources:\n        limits:\n          memory:\s*\S+\n', '\n    mem_limit: 768m\n', text)
 if 'mem_limit' in text:
-    text = re.sub(r'mem_limit:\s*\S+', 'mem_limit: 2g', text)
+    text = re.sub(r'mem_limit:\s*\S+', 'mem_limit: 768m', text)
 else:
-    text = text.replace('\n    init: true\n', '\n    init: true\n    mem_limit: 2g\n')
+    text = text.replace('\n    init: true\n', '\n    init: true\n    mem_limit: 768m\n')
 if 'NODE_OPTIONS' not in text:
-    text = text.replace('      PATH:', '      NODE_OPTIONS: "--max-old-space-size=1536"\n      PATH:')
+    text = text.replace('      PATH:', '      NODE_OPTIONS: "--max-old-space-size=512"\n      PATH:')
 else:
-    text = re.sub(r'NODE_OPTIONS:.*', 'NODE_OPTIONS: "--max-old-space-size=1536"', text)
+    text = re.sub(r'NODE_OPTIONS:.*', 'NODE_OPTIONS: "--max-old-space-size=512"', text)
 text = re.sub(
     r'healthcheck:.*?start_period:\s*\S+',
     'healthcheck:\n'
@@ -63,7 +63,7 @@ ENTRYPOINT_BLOCK = (
     '        "-c",\n'
     '        "rm -f /home/node/.openclaw/*.lock /home/node/.openclaw/*.pid 2>/dev/null;'
     ' START=$$(date +%s);'
-    ' node --max-old-space-size=1536 dist/index.js gateway'
+    ' node --max-old-space-size=512 dist/index.js gateway'
     ' --bind ${OPENCLAW_GATEWAY_BIND:-loopback} --port 18789 --allow-unconfigured;'
     ' EXIT=$$?; ELAPSED=$$(($$(date +%s) - START));'
     ' if [ $$ELAPSED -lt 10 ]; then'
