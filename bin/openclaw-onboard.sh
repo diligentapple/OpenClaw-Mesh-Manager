@@ -36,10 +36,14 @@ echo "Running onboarding for instance #$N..."
 # killing the interactive exec session (the root cause of the "exits after
 # channel selection" bug).
 docker run --rm -it \
+  --init \
+  --memory 2g \
   -e HOME=/home/node \
   -e TERM=xterm-256color \
   -e NPM_CONFIG_PREFIX=/home/node/.npm-global \
+  -e "NODE_OPTIONS=--max-old-space-size=1536" \
   -e PATH=/home/node/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  --no-healthcheck \
   -v "${DATA_DIR}:/home/node/.openclaw" \
   "$IMAGE" \
   node dist/index.js onboard --mode local
