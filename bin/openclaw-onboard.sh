@@ -157,17 +157,36 @@ for i in $(seq 1 20); do
   fi
 done
 
-# Always enable insecure auth so HTTP fallback URLs work without HTTPS
+# Enable insecure auth and host-header origin fallback so the gateway
+# can run with BIND=lan (required for mesh networking) without needing
+# explicit allowedOrigins.
 CONFIG="${DATA_DIR}/openclaw.json"
 if sudo test -f "$CONFIG" 2>/dev/null; then
   local_tmp=$(mktemp)
-  if sudo jq '.gateway.controlUi.allowInsecureAuth = true' "$CONFIG" > "$local_tmp" && jq empty "$local_tmp" 2>/dev/null; then
+  if sudo jq '
+    .gateway.controlUi.allowInsecureAuth = true |
+    .gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback = true
+  ' "$CONFIG" > "$local_tmp" && jq empty "$local_tmp" 2>/dev/null; then
     owner=$(sudo stat -c '%u:%g' "$CONFIG")
     sudo mv "$local_tmp" "$CONFIG"
     sudo chown "$owner" "$CONFIG"
   else
     rm -f "$local_tmp"
   fi
+fi
+
+# Switch gateway binding to lan now that the config has the required
+# origin settings.  This allows the mesh bridge to reach the gateway.
+COMPOSE_FILE_DIR="${HOME_DIR}/openclaw${N}"
+ENV_FILE="${COMPOSE_FILE_DIR}/.env"
+if [[ -f "$ENV_FILE" ]]; then
+  sed -i 's/^OPENCLAW_GATEWAY_BIND=.*/OPENCLAW_GATEWAY_BIND=lan/' "$ENV_FILE"
+fi
+
+# Restart the gateway to pick up the BIND=lan change
+if [[ -f "$COMPOSE_FILE" ]]; then
+  $COMPOSE_BIN --project-directory "${COMPOSE_FILE_DIR}" \
+    -f "$COMPOSE_FILE" up -d --force-recreate >/dev/null 2>&1 || true
 fi
 
 # Restart any other gateways that were stopped to free memory
