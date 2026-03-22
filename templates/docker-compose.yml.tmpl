@@ -3,7 +3,7 @@ services:
     image: ghcr.io/openclaw/openclaw:latest
     container_name: openclaw{{N}}-gateway
     user: root
-    restart: unless-stopped
+    restart: "on-failure:5"
     environment:
       HOME: /home/node
       TERM: xterm-256color
@@ -25,7 +25,7 @@ services:
       [
         "/bin/sh",
         "-c",
-        "rm -f /home/node/.openclaw/*.lock /home/node/.openclaw/*.pid /home/node/.openclaw/gateway.lock 2>/dev/null; exec node --max-old-space-size=1536 dist/index.js gateway --bind ${OPENCLAW_GATEWAY_BIND:-loopback} --port 18789 --allow-unconfigured"
+        "rm -f /home/node/.openclaw/*.lock /home/node/.openclaw/*.pid /home/node/.openclaw/gateway.lock 2>/dev/null; START=$(date +%s); node --max-old-space-size=1536 dist/index.js gateway --bind ${OPENCLAW_GATEWAY_BIND:-loopback} --port 18789 --allow-unconfigured; EXIT=$?; ELAPSED=$(($(date +%s) - START)); if [ $ELAPSED -lt 10 ]; then echo \"[openclaw] Process exited after ${ELAPSED}s (code $EXIT). Waiting 30s to prevent restart storm...\"; sleep 30; fi; exit $EXIT"
       ]
     networks:
       - default

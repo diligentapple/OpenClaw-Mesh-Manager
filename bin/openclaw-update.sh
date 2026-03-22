@@ -55,16 +55,29 @@ text = re.sub(
       retries: 3
       start_period: 45s''',
     text, flags=re.DOTALL)
-# 5. Convert command: to entrypoint: with stale lock cleanup
+# 5. Convert command: to entrypoint: with stale lock cleanup and crash guard
 text = re.sub(
     r'command:\s*\[.*?\]',
     '''entrypoint:
       [
         \"/bin/sh\",
         \"-c\",
-        \"rm -f /home/node/.openclaw/*.lock /home/node/.openclaw/*.pid 2>/dev/null; exec node --max-old-space-size=1536 dist/index.js gateway --bind \${OPENCLAW_GATEWAY_BIND:-loopback} --port 18789 --allow-unconfigured\"
+        \"rm -f /home/node/.openclaw/*.lock /home/node/.openclaw/*.pid 2>/dev/null; START=\\$(date +%s); node --max-old-space-size=1536 dist/index.js gateway --bind \${OPENCLAW_GATEWAY_BIND:-loopback} --port 18789 --allow-unconfigured; EXIT=\\$?; ELAPSED=\\$((\\$(date +%s) - START)); if [ \\$ELAPSED -lt 10 ]; then echo '[openclaw] Process exited after \\${ELAPSED}s (code \\$EXIT). Waiting 30s to prevent restart storm...'; sleep 30; fi; exit \\$EXIT\"
       ]''',
     text, flags=re.DOTALL)
+# 6. Upgrade existing entrypoint: blocks that lack the crash guard
+if 'entrypoint:' in text and 'restart storm' not in text:
+    text = re.sub(
+        r'entrypoint:\s*\[.*?\]',
+        '''entrypoint:
+      [
+        \"/bin/sh\",
+        \"-c\",
+        \"rm -f /home/node/.openclaw/*.lock /home/node/.openclaw/*.pid 2>/dev/null; START=\\$(date +%s); node --max-old-space-size=1536 dist/index.js gateway --bind \${OPENCLAW_GATEWAY_BIND:-loopback} --port 18789 --allow-unconfigured; EXIT=\\$?; ELAPSED=\\$((\\$(date +%s) - START)); if [ \\$ELAPSED -lt 10 ]; then echo '[openclaw] Process exited after \\${ELAPSED}s (code \\$EXIT). Waiting 30s to prevent restart storm...'; sleep 30; fi; exit \\$EXIT\"
+      ]''',
+        text, flags=re.DOTALL)
+# 7. Fix restart policy: unless-stopped -> on-failure:5 to prevent infinite loops
+text = re.sub(r'restart:\s*unless-stopped', 'restart: \"on-failure:5\"', text)
 open(sys.argv[1], 'w').write(text)
 " "$COMPOSE_FILE" 2>/dev/null || true
 
