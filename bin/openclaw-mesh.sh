@@ -107,17 +107,17 @@ collect_instances() {
     env_file="${dir}.env"
     token=""
 
-    # Primary: read token from the compose .env file
-    if [[ -f "$env_file" ]]; then
-      token=$(grep -oP '^OPENCLAW_GATEWAY_TOKEN=\K.*' "$env_file" 2>/dev/null || true)
+    # Primary: read token from openclaw.json (the gateway's actual config).
+    # After onboarding the wizard writes its own token here, which may differ
+    # from the OPENCLAW_GATEWAY_TOKEN env var in .env.
+    local cfg="${HOME_DIR}/.openclaw${num}/openclaw.json"
+    if sudo test -f "$cfg" 2>/dev/null; then
+      token=$(sudo jq -r '.gateway.auth.token // empty' "$cfg" 2>/dev/null || true)
     fi
 
-    # Fallback: read from the instance config JSON
-    if [[ -z "$token" ]]; then
-      local cfg="${HOME_DIR}/.openclaw${num}/openclaw.json"
-      if [[ -f "$cfg" ]]; then
-        token=$(jq -r '.gateway.auth.token // empty' "$cfg" 2>/dev/null || true)
-      fi
+    # Fallback: read from the compose .env file (pre-onboarding instances)
+    if [[ -z "$token" ]] && [[ -f "$env_file" ]]; then
+      token=$(grep -oP '^OPENCLAW_GATEWAY_TOKEN=\K.*' "$env_file" 2>/dev/null || true)
     fi
 
     if [[ -n "$token" ]]; then
