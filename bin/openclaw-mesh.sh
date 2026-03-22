@@ -347,7 +347,9 @@ start_bridge() {
   docker run -d \
     --name "$BRIDGE_CONTAINER" \
     --network "$NETWORK_NAME" \
-    --restart unless-stopped \
+    --restart on-failure:5 \
+    --init \
+    --no-healthcheck \
     --memory 128m \
     -v "${MESH_DIR}/bridge.js:/bridge/bridge.js:ro" \
     -v "${MESH_DIR}/config.json:/data/config.json:ro" \
