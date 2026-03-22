@@ -11,7 +11,8 @@ Easily run a fleet of [OpenClaw](https://github.com/openclaw/openclaw) AI agents
 ```bash
 # One-liner (no git required)
 curl -fsSL https://raw.githubusercontent.com/diligentapple/OpenClaw-Mesh-Manager/main/bootstrap.sh | sudo bash
-
+```
+```
 # Or clone and install
 git clone https://github.com/diligentapple/OpenClaw-Mesh-Manager.git
 cd OpenClaw-Mesh-Manager
