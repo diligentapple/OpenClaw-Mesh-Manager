@@ -182,21 +182,21 @@ class GatewayClient {
     });
   }
 
-  _send(method, params) {
+  _send(method, params, timeoutMs = 30000) {
     return new Promise((resolve, reject) => {
       const id = String(++this._reqId);
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`Request timeout: ${method}`));
-      }, 30000);
+      }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       this.ws.send(JSON.stringify({ type: 'req', id, method, params }));
     });
   }
 
-  async request(method, params) {
+  async request(method, params, timeoutMs = 30000) {
     await this.ensureConnected();
-    return this._send(method, params);
+    return this._send(method, params, timeoutMs);
   }
 
   /** Wait for a terminal chat event matching the given sessionKey / runId. */
@@ -462,19 +462,43 @@ const server = http.createServer(async (req, res) => {
       const key = sessionKey || 'main';
       const idempotencyKey = crypto.randomUUID();
 
-      // Register waiter BEFORE sending so we don't miss fast responses.
-      // We initially match on sessionKey; if chat.send returns a runId we
-      // update the waiter to match on that instead (more reliable).
+      // Strategy: try chat.send with a long timeout — many gateways return
+      // the AI response synchronously in the res payload.  If the gateway
+      // returns a short ack instead (no message), fall back to waiting for
+      // a chat event.
+      console.log(`[bridge] /send: sending to instance ${to}, session=${key}`);
+
+      // Register event waiter as safety net (in case gateway pushes events)
       const responsePromise = client.waitForChat(key, null, RESPONSE_TIMEOUT);
 
       const sendResult = await client.request('chat.send', {
         sessionKey: key,
         message: String(message),
         idempotencyKey,
-      });
+      }, RESPONSE_TIMEOUT);
 
-      // If the gateway returned a runId, update the waiter to match on it
-      // so we don't miss events due to sessionKey differences.
+      console.log(`[bridge] /send: chat.send returned:`, JSON.stringify(sendResult).slice(0, 500));
+
+      // Check if the response is already in the sendResult
+      const syncText = extractText(sendResult?.message || sendResult?.response);
+      if (syncText) {
+        // Cancel the event waiter — we already have the response
+        const idx = client.chatWaiters.length - 1;
+        if (idx >= 0) {
+          clearTimeout(client.chatWaiters[idx].timer);
+          client.chatWaiters.splice(idx, 1);
+        }
+        console.log(`[bridge] /send: got synchronous response (${syncText.length} chars)`);
+        return sendJson(res, 200, {
+          ok: true,
+          from: to,
+          sessionKey: key,
+          response: syncText,
+        });
+      }
+
+      // No inline response — wait for chat event
+      console.log(`[bridge] /send: no inline response, waiting for chat event (runId=${sendResult?.runId || '?'})...`);
       if (sendResult && sendResult.runId) {
         const waiter = client.chatWaiters[client.chatWaiters.length - 1];
         if (waiter) {
@@ -544,19 +568,32 @@ const server = http.createServer(async (req, res) => {
         sessionKey: tKey,
         message: String(message),
         idempotencyKey,
-      });
+      }, RESPONSE_TIMEOUT);
 
-      // Update waiter to match on runId if available
-      if (sendResult && sendResult.runId) {
-        const waiter = targetClient.chatWaiters[targetClient.chatWaiters.length - 1];
-        if (waiter) {
-          const runId = sendResult.runId;
-          waiter.matchFn = (payload) => payload.runId === runId;
+      console.log(`[bridge] /relay: chat.send returned:`, JSON.stringify(sendResult).slice(0, 500));
+
+      // Check if the response is already in the sendResult
+      let text = extractText(sendResult?.message || sendResult?.response);
+      if (text) {
+        const idx = targetClient.chatWaiters.length - 1;
+        if (idx >= 0) {
+          clearTimeout(targetClient.chatWaiters[idx].timer);
+          targetClient.chatWaiters.splice(idx, 1);
         }
+        console.log(`[bridge] /relay: got synchronous response (${text.length} chars)`);
+      } else {
+        // Fall back to waiting for chat event
+        console.log(`[bridge] /relay: no inline response, waiting for chat event...`);
+        if (sendResult && sendResult.runId) {
+          const waiter = targetClient.chatWaiters[targetClient.chatWaiters.length - 1];
+          if (waiter) {
+            const runId = sendResult.runId;
+            waiter.matchFn = (payload) => payload.runId === runId;
+          }
+        }
+        const chatPayload = await responsePromise;
+        text = extractText(chatPayload.message);
       }
-
-      const chatPayload = await responsePromise;
-      const text = extractText(chatPayload.message);
 
       // Inject the response back into the source instance's session
       const sourceClient = await getClient(from);
