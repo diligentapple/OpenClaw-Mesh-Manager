@@ -351,6 +351,7 @@ start_bridge() {
     --init \
     --no-healthcheck \
     --memory 128m \
+    -p "127.0.0.1:${BRIDGE_INTERNAL_PORT}:${BRIDGE_INTERNAL_PORT}" \
     -v "${MESH_DIR}/bridge.js:/bridge/bridge.js:ro" \
     -v "${MESH_DIR}/config.json:/data/config.json:ro" \
     -e BRIDGE_PORT="$BRIDGE_INTERNAL_PORT" \

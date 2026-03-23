@@ -5,6 +5,12 @@ const WebSocket = require('ws');
 const fs = require('fs');
 const crypto = require('crypto');
 
+// Prevent unhandled promise rejections from crashing the bridge.
+// These can happen when a WebSocket closes while chat waiters are pending.
+process.on('unhandledRejection', (err) => {
+  console.warn('[bridge] Unhandled rejection:', err.message || err);
+});
+
 const CONFIG_PATH = process.env.BRIDGE_CONFIG || '/data/config.json';
 const PORT = parseInt(process.env.BRIDGE_PORT || '3000', 10);
 const RESPONSE_TIMEOUT = parseInt(process.env.RESPONSE_TIMEOUT || '120000', 10);
@@ -26,6 +32,8 @@ function loadConfig() {
 class GatewayClient {
   constructor(instanceId, host, port, token) {
     this.instanceId = instanceId;
+    this.host = host;
+    this.port = port;
     this.url = `ws://${host}:${port}`;
     this.token = token;
     this.ws = null;
@@ -49,7 +57,9 @@ class GatewayClient {
 
   _connect() {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(this.url);
+      const ws = new WebSocket(this.url, {
+        headers: { Origin: 'http://localhost:' + this.port },
+      });
       this.ws = ws;
 
       const timeout = setTimeout(() => {
@@ -85,13 +95,18 @@ class GatewayClient {
         let msg;
         try { msg = JSON.parse(data.toString()); } catch { return; }
 
+        // Log all incoming events for debugging
+        if (msg.type === 'event') {
+          console.log(`[bridge] Instance ${this.instanceId} event: ${msg.event}`);
+        }
+
         // --- challenge-response auth ---
         if (msg.type === 'event' && msg.event === 'connect.challenge') {
           this._send('connect', {
             minProtocol: 3,
             maxProtocol: 3,
             client: {
-              id: 'openclaw-control-ui',
+              id: 'gateway-client',
               version: '1.0.0',
               platform: 'linux',
               mode: 'backend',
@@ -112,6 +127,22 @@ class GatewayClient {
             this._reconnectAttempt = 0;
             this._connectedAt = Date.now();
             console.log(`[bridge] Connected to instance ${this.instanceId}`);
+            // Subscribe to chat events so we receive response notifications.
+            // Without this the gateway won't push chat events to us, and
+            // waitForChat() will always time out.
+            return this._send('events.subscribe', {
+              events: ['chat'],
+            }).catch(err => {
+              console.warn(`[bridge] Instance ${this.instanceId}: events.subscribe failed: ${err.message} — trying events.listen fallback`);
+              return this._send('events.listen', {
+                events: ['chat'],
+              }).catch(() => {
+                // Some gateway versions auto-deliver events to operators,
+                // so this failure may be harmless.  Log and continue.
+                console.warn(`[bridge] Instance ${this.instanceId}: events.listen also failed — events may be auto-delivered`);
+              });
+            });
+          }).then(() => {
             if (this.onStateChange) this.onStateChange(this.instanceId, true);
             resolve();
           }).catch((err) => {
@@ -138,6 +169,7 @@ class GatewayClient {
           const payload = msg.payload;
           if (!payload) return;
           const terminal = ['final', 'error', 'aborted'].includes(payload.state);
+          console.log(`[bridge] Instance ${this.instanceId} chat event: state=${payload.state} sessionKey=${payload.sessionKey || '?'} runId=${payload.runId || '?'} terminal=${terminal} waiters=${this.chatWaiters.length}`);
           if (!terminal) return;
 
           const idx = this.chatWaiters.findIndex(w => w.matchFn(payload));
@@ -156,21 +188,21 @@ class GatewayClient {
     });
   }
 
-  _send(method, params) {
+  _send(method, params, timeoutMs = 30000) {
     return new Promise((resolve, reject) => {
       const id = String(++this._reqId);
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`Request timeout: ${method}`));
-      }, 30000);
+      }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       this.ws.send(JSON.stringify({ type: 'req', id, method, params }));
     });
   }
 
-  async request(method, params) {
+  async request(method, params, timeoutMs = 30000) {
     await this.ensureConnected();
-    return this._send(method, params);
+    return this._send(method, params, timeoutMs);
   }
 
   /** Wait for a terminal chat event matching the given sessionKey / runId. */
@@ -251,7 +283,7 @@ async function getClient(instanceId) {
   client = new GatewayClient(
     instanceId,
     inst.host,
-    inst.port || 18789,
+    inst.port || 18790,
     inst.token,
   );
   client.onStateChange = (id, connected) => {
@@ -338,12 +370,21 @@ async function broadcastRoster() {
         console.log(`[bridge]   Instance #${id}: skipping roster (connected ${Math.round((now - connectedAt) / 1000)}s ago, waiting ${Math.round(ROSTER_READY_DELAY_MS / 1000)}s)`);
         return;
       }
+      // Query active sessions and inject into the first one found
+      const sessionsResult = await client.request('sessions.list', {});
+      const sessions = sessionsResult?.sessions || sessionsResult || [];
+      const sessionList = Array.isArray(sessions) ? sessions : [];
+      if (sessionList.length === 0) {
+        console.log(`[bridge]   Instance #${id}: no active sessions, skipping roster`);
+        return;
+      }
+      const sessionKey = sessionList[0].key || sessionList[0].sessionKey || sessionList[0];
       await client.request('chat.inject', {
-        sessionKey: 'main',
+        sessionKey,
         message: roster,
         label: 'mesh-roster',
       });
-      console.log(`[bridge]   Instance #${id}: roster delivered`);
+      console.log(`[bridge]   Instance #${id}: roster delivered to session ${sessionKey}`);
     })
   );
 
@@ -427,15 +468,50 @@ const server = http.createServer(async (req, res) => {
       const key = sessionKey || 'main';
       const idempotencyKey = crypto.randomUUID();
 
-      // Register waiter BEFORE sending so we don't miss fast responses
+      // Strategy: try chat.send with a long timeout — many gateways return
+      // the AI response synchronously in the res payload.  If the gateway
+      // returns a short ack instead (no message), fall back to waiting for
+      // a chat event.
+      console.log(`[bridge] /send: sending to instance ${to}, session=${key}`);
+
+      // Register event waiter as safety net (in case gateway pushes events)
       const responsePromise = client.waitForChat(key, null, RESPONSE_TIMEOUT);
 
-      await client.request('chat.send', {
+      const sendResult = await client.request('chat.send', {
         sessionKey: key,
         message: String(message),
-        deliver: false,
         idempotencyKey,
-      });
+      }, RESPONSE_TIMEOUT);
+
+      console.log(`[bridge] /send: chat.send returned:`, JSON.stringify(sendResult).slice(0, 500));
+
+      // Check if the response is already in the sendResult
+      const syncText = extractText(sendResult?.message || sendResult?.response);
+      if (syncText) {
+        // Cancel the event waiter — we already have the response
+        const idx = client.chatWaiters.length - 1;
+        if (idx >= 0) {
+          clearTimeout(client.chatWaiters[idx].timer);
+          client.chatWaiters.splice(idx, 1);
+        }
+        console.log(`[bridge] /send: got synchronous response (${syncText.length} chars)`);
+        return sendJson(res, 200, {
+          ok: true,
+          from: to,
+          sessionKey: key,
+          response: syncText,
+        });
+      }
+
+      // No inline response — wait for chat event
+      console.log(`[bridge] /send: no inline response, waiting for chat event (runId=${sendResult?.runId || '?'})...`);
+      if (sendResult && sendResult.runId) {
+        const waiter = client.chatWaiters[client.chatWaiters.length - 1];
+        if (waiter) {
+          const runId = sendResult.runId;
+          waiter.matchFn = (payload) => payload.runId === runId;
+        }
+      }
 
       const chatPayload = await responsePromise;
       const text = extractText(chatPayload.message);
@@ -494,15 +570,36 @@ const server = http.createServer(async (req, res) => {
       const idempotencyKey = crypto.randomUUID();
       const responsePromise = targetClient.waitForChat(tKey, null, RESPONSE_TIMEOUT);
 
-      await targetClient.request('chat.send', {
+      const sendResult = await targetClient.request('chat.send', {
         sessionKey: tKey,
         message: String(message),
-        deliver: false,
         idempotencyKey,
-      });
+      }, RESPONSE_TIMEOUT);
 
-      const chatPayload = await responsePromise;
-      const text = extractText(chatPayload.message);
+      console.log(`[bridge] /relay: chat.send returned:`, JSON.stringify(sendResult).slice(0, 500));
+
+      // Check if the response is already in the sendResult
+      let text = extractText(sendResult?.message || sendResult?.response);
+      if (text) {
+        const idx = targetClient.chatWaiters.length - 1;
+        if (idx >= 0) {
+          clearTimeout(targetClient.chatWaiters[idx].timer);
+          targetClient.chatWaiters.splice(idx, 1);
+        }
+        console.log(`[bridge] /relay: got synchronous response (${text.length} chars)`);
+      } else {
+        // Fall back to waiting for chat event
+        console.log(`[bridge] /relay: no inline response, waiting for chat event...`);
+        if (sendResult && sendResult.runId) {
+          const waiter = targetClient.chatWaiters[targetClient.chatWaiters.length - 1];
+          if (waiter) {
+            const runId = sendResult.runId;
+            waiter.matchFn = (payload) => payload.runId === runId;
+          }
+        }
+        const chatPayload = await responsePromise;
+        text = extractText(chatPayload.message);
+      }
 
       // Inject the response back into the source instance's session
       const sourceClient = await getClient(from);
