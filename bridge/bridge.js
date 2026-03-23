@@ -91,13 +91,19 @@ class GatewayClient {
             minProtocol: 3,
             maxProtocol: 3,
             client: {
-              id: 'gateway-client',
+              id: 'openclaw-control-ui',
               version: '1.0.0',
               platform: 'linux',
               mode: 'backend',
             },
             role: 'operator',
-            scopes: ['operator.admin'],
+            scopes: [
+              'operator.admin',
+              'operator.read',
+              'operator.write',
+              'operator.approvals',
+              'operator.pairing',
+            ],
             auth: { token: this.token },
           }).then(() => {
             clearTimeout(timeout);
