@@ -51,9 +51,7 @@ class GatewayClient {
 
   _connect() {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(this.url, {
-        headers: { Origin: `http://${this.host}:${this.port}` },
-      });
+      const ws = new WebSocket(this.url);
       this.ws = ws;
 
       const timeout = setTimeout(() => {
@@ -255,7 +253,7 @@ async function getClient(instanceId) {
   client = new GatewayClient(
     instanceId,
     inst.host,
-    inst.port || 18789,
+    inst.port || 18790,
     inst.token,
   );
   client.onStateChange = (id, connected) => {
