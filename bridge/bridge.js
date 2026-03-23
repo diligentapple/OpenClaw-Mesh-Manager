@@ -5,6 +5,12 @@ const WebSocket = require('ws');
 const fs = require('fs');
 const crypto = require('crypto');
 
+// Prevent unhandled promise rejections from crashing the bridge.
+// These can happen when a WebSocket closes while chat waiters are pending.
+process.on('unhandledRejection', (err) => {
+  console.warn('[bridge] Unhandled rejection:', err.message || err);
+});
+
 const CONFIG_PATH = process.env.BRIDGE_CONFIG || '/data/config.json';
 const PORT = parseInt(process.env.BRIDGE_PORT || '3000', 10);
 const RESPONSE_TIMEOUT = parseInt(process.env.RESPONSE_TIMEOUT || '120000', 10);
