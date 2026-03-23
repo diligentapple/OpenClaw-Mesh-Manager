@@ -89,6 +89,11 @@ class GatewayClient {
         let msg;
         try { msg = JSON.parse(data.toString()); } catch { return; }
 
+        // Log all incoming events for debugging
+        if (msg.type === 'event') {
+          console.log(`[bridge] Instance ${this.instanceId} event: ${msg.event}`);
+        }
+
         // --- challenge-response auth ---
         if (msg.type === 'event' && msg.event === 'connect.challenge') {
           this._send('connect', {
@@ -116,6 +121,22 @@ class GatewayClient {
             this._reconnectAttempt = 0;
             this._connectedAt = Date.now();
             console.log(`[bridge] Connected to instance ${this.instanceId}`);
+            // Subscribe to chat events so we receive response notifications.
+            // Without this the gateway won't push chat events to us, and
+            // waitForChat() will always time out.
+            return this._send('events.subscribe', {
+              events: ['chat'],
+            }).catch(err => {
+              console.warn(`[bridge] Instance ${this.instanceId}: events.subscribe failed: ${err.message} — trying events.listen fallback`);
+              return this._send('events.listen', {
+                events: ['chat'],
+              }).catch(() => {
+                // Some gateway versions auto-deliver events to operators,
+                // so this failure may be harmless.  Log and continue.
+                console.warn(`[bridge] Instance ${this.instanceId}: events.listen also failed — events may be auto-delivered`);
+              });
+            });
+          }).then(() => {
             if (this.onStateChange) this.onStateChange(this.instanceId, true);
             resolve();
           }).catch((err) => {
@@ -142,6 +163,7 @@ class GatewayClient {
           const payload = msg.payload;
           if (!payload) return;
           const terminal = ['final', 'error', 'aborted'].includes(payload.state);
+          console.log(`[bridge] Instance ${this.instanceId} chat event: state=${payload.state} sessionKey=${payload.sessionKey || '?'} runId=${payload.runId || '?'} terminal=${terminal} waiters=${this.chatWaiters.length}`);
           if (!terminal) return;
 
           const idx = this.chatWaiters.findIndex(w => w.matchFn(payload));
@@ -440,15 +462,26 @@ const server = http.createServer(async (req, res) => {
       const key = sessionKey || 'main';
       const idempotencyKey = crypto.randomUUID();
 
-      // Register waiter BEFORE sending so we don't miss fast responses
+      // Register waiter BEFORE sending so we don't miss fast responses.
+      // We initially match on sessionKey; if chat.send returns a runId we
+      // update the waiter to match on that instead (more reliable).
       const responsePromise = client.waitForChat(key, null, RESPONSE_TIMEOUT);
 
-      await client.request('chat.send', {
+      const sendResult = await client.request('chat.send', {
         sessionKey: key,
         message: String(message),
-        deliver: false,
         idempotencyKey,
       });
+
+      // If the gateway returned a runId, update the waiter to match on it
+      // so we don't miss events due to sessionKey differences.
+      if (sendResult && sendResult.runId) {
+        const waiter = client.chatWaiters[client.chatWaiters.length - 1];
+        if (waiter) {
+          const runId = sendResult.runId;
+          waiter.matchFn = (payload) => payload.runId === runId;
+        }
+      }
 
       const chatPayload = await responsePromise;
       const text = extractText(chatPayload.message);
@@ -507,12 +540,20 @@ const server = http.createServer(async (req, res) => {
       const idempotencyKey = crypto.randomUUID();
       const responsePromise = targetClient.waitForChat(tKey, null, RESPONSE_TIMEOUT);
 
-      await targetClient.request('chat.send', {
+      const sendResult = await targetClient.request('chat.send', {
         sessionKey: tKey,
         message: String(message),
-        deliver: false,
         idempotencyKey,
       });
+
+      // Update waiter to match on runId if available
+      if (sendResult && sendResult.runId) {
+        const waiter = targetClient.chatWaiters[targetClient.chatWaiters.length - 1];
+        if (waiter) {
+          const runId = sendResult.runId;
+          waiter.matchFn = (payload) => payload.runId === runId;
+        }
+      }
 
       const chatPayload = await responsePromise;
       const text = extractText(chatPayload.message);
