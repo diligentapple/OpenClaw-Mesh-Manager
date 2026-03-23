@@ -26,6 +26,8 @@ function loadConfig() {
 class GatewayClient {
   constructor(instanceId, host, port, token) {
     this.instanceId = instanceId;
+    this.host = host;
+    this.port = port;
     this.url = `ws://${host}:${port}`;
     this.token = token;
     this.ws = null;
@@ -49,7 +51,9 @@ class GatewayClient {
 
   _connect() {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(this.url);
+      const ws = new WebSocket(this.url, {
+        headers: { Origin: `http://${this.host}:${this.port}` },
+      });
       this.ws = ws;
 
       const timeout = setTimeout(() => {
