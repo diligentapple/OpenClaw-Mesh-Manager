@@ -342,12 +342,21 @@ async function broadcastRoster() {
         console.log(`[bridge]   Instance #${id}: skipping roster (connected ${Math.round((now - connectedAt) / 1000)}s ago, waiting ${Math.round(ROSTER_READY_DELAY_MS / 1000)}s)`);
         return;
       }
+      // Query active sessions and inject into the first one found
+      const sessionsResult = await client.request('sessions.list', {});
+      const sessions = sessionsResult?.sessions || sessionsResult || [];
+      const sessionList = Array.isArray(sessions) ? sessions : [];
+      if (sessionList.length === 0) {
+        console.log(`[bridge]   Instance #${id}: no active sessions, skipping roster`);
+        return;
+      }
+      const sessionKey = sessionList[0].key || sessionList[0].sessionKey || sessionList[0];
       await client.request('chat.inject', {
-        sessionKey: 'main',
+        sessionKey,
         message: roster,
         label: 'mesh-roster',
       });
-      console.log(`[bridge]   Instance #${id}: roster delivered`);
+      console.log(`[bridge]   Instance #${id}: roster delivered to session ${sessionKey}`);
     })
   );
 
