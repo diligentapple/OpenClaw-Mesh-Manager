@@ -51,7 +51,9 @@ class GatewayClient {
 
   _connect() {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(this.url);
+      const ws = new WebSocket(this.url, {
+        headers: { Origin: 'http://localhost:' + this.port },
+      });
       this.ws = ws;
 
       const timeout = setTimeout(() => {
