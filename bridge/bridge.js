@@ -45,6 +45,7 @@ class GatewayClient {
     this._reconnectTimer = null;
     this._reconnectAttempt = 0;
     this._shouldReconnect = false;     // set to true once first connection succeeds
+    this._consecutiveDnsFailures = 0;  // track DNS failures for diagnostics
     this.onStateChange = null;         // (instanceId, connected) => void
   }
 
@@ -236,10 +237,29 @@ class GatewayClient {
       this._reconnectTimer = null;
       this.ensureConnected()
         .then(() => {
+          this._consecutiveDnsFailures = 0;
           console.log(`[bridge] Reconnected to instance ${this.instanceId}`);
         })
         .catch((err) => {
-          console.warn(`[bridge] Reconnect to instance ${this.instanceId} failed: ${err.message}`);
+          const isDns = err.code === 'ENOTFOUND' ||
+            (err.message && err.message.includes('ENOTFOUND'));
+          if (isDns) {
+            this._consecutiveDnsFailures = (this._consecutiveDnsFailures || 0) + 1;
+            console.warn(
+              `[bridge] Reconnect to instance ${this.instanceId} failed: ` +
+              `DNS lookup failed for ${this.host} (ENOTFOUND). ` +
+              `The gateway container may not be on the mesh network.`
+            );
+            if (this._consecutiveDnsFailures === 3) {
+              console.warn(
+                `[bridge] Instance ${this.instanceId}: persistent DNS failure. ` +
+                `To fix, run: docker network connect <mesh-network> ${this.host}`
+              );
+            }
+          } else {
+            this._consecutiveDnsFailures = 0;
+            console.warn(`[bridge] Reconnect to instance ${this.instanceId} failed: ${err.message}`);
+          }
           this._scheduleReconnect();
         });
     }, delay);
@@ -648,7 +668,18 @@ server.listen(PORT, '0.0.0.0', () => {
     const config = loadConfig();
     for (const id of Object.keys(config.instances)) {
       getClient(id).catch((err) => {
-        console.warn(`[bridge] Pre-connect to instance ${id} failed: ${err.message}`);
+        const isDns = err.code === 'ENOTFOUND' ||
+          (err.message && err.message.includes('ENOTFOUND'));
+        if (isDns) {
+          const inst = config.instances[id];
+          console.warn(
+            `[bridge] Pre-connect to instance ${id} failed: ` +
+            `DNS lookup failed for ${inst ? inst.host : '?'} (ENOTFOUND). ` +
+            `Container may not be on the mesh network or not running yet.`
+          );
+        } else {
+          console.warn(`[bridge] Pre-connect to instance ${id} failed: ${err.message}`);
+        }
         // Enable auto-reconnect even though initial connect failed — the
         // instance may still be booting.  getClient stores the client in
         // the pool before attempting connection, so it's available here.

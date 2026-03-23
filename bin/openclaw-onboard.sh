@@ -123,8 +123,8 @@ text = re.sub(r'command:\s*\[.*?\]', ENTRYPOINT_BLOCK, text, flags=re.DOTALL)
 # 6. Upgrade existing entrypoint: blocks that lack the crash guard
 if 'entrypoint:' in text and 'restart storm' not in text and 'Waiting 30s' not in text:
     text = re.sub(r'entrypoint:\s*\[.*?\]', ENTRYPOINT_BLOCK, text, flags=re.DOTALL)
-# 7. Fix restart policy: unless-stopped -> on-failure:5 to prevent infinite loops
-text = re.sub(r'restart:\s*unless-stopped', 'restart: "on-failure:5"', text)
+# 7. Upgrade restart policy: on-failure:5 -> unless-stopped (crash guard prevents storms)
+text = re.sub(r'restart:\s*"on-failure:\d+"', 'restart: unless-stopped', text)
 open(sys.argv[1], 'w').write(text)
 PYEOF
 fi
