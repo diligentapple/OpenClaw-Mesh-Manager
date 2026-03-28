@@ -18,6 +18,14 @@ const ROSTER_DEBOUNCE_MS = parseInt(process.env.ROSTER_DEBOUNCE_MS || '15000', 1
 const RECONNECT_BASE_MS = parseInt(process.env.RECONNECT_BASE_MS || '10000', 10);
 const RECONNECT_MAX_MS = parseInt(process.env.RECONNECT_MAX_MS || '120000', 10);
 const ROSTER_READY_DELAY_MS = parseInt(process.env.ROSTER_READY_DELAY_MS || '60000', 10);
+const AGENT_WAIT_TIMEOUT_PADDING_MS = parseInt(
+  process.env.AGENT_WAIT_TIMEOUT_PADDING_MS || '5000',
+  10,
+);
+const CHAT_EVENT_GRACE_MS = parseInt(process.env.CHAT_EVENT_GRACE_MS || '1500', 10);
+const HISTORY_POLL_ATTEMPTS = parseInt(process.env.HISTORY_POLL_ATTEMPTS || '4', 10);
+const HISTORY_POLL_INTERVAL_MS = parseInt(process.env.HISTORY_POLL_INTERVAL_MS || '750', 10);
+const HISTORY_POLL_LIMIT = parseInt(process.env.HISTORY_POLL_LIMIT || '20', 10);
 
 // ---------------------------------------------------------------------------
 // Config
@@ -83,7 +91,7 @@ class GatewayClient {
           p.reject(new Error('connection closed'));
         }
         this.pending.clear();
-        for (const w of this.chatWaiters) {
+        for (const w of [...this.chatWaiters]) {
           clearTimeout(w.timer);
           w.reject(new Error('connection closed'));
         }
@@ -108,10 +116,12 @@ class GatewayClient {
             maxProtocol: 3,
             client: {
               id: 'gateway-client',
+              displayName: 'OpenClaw Mesh Bridge',
               version: '1.0.0',
               platform: 'linux',
               mode: 'backend',
             },
+            locale: 'en-US',
             role: 'operator',
             scopes: [
               'operator.admin',
@@ -128,24 +138,13 @@ class GatewayClient {
             this._reconnectAttempt = 0;
             this._connectedAt = Date.now();
             console.log(`[bridge] Connected to instance ${this.instanceId}`);
-            // Subscribe to chat events so we receive response notifications.
-            // Without this the gateway won't push chat events to us, and
-            // waitForChat() will always time out.
-            return this._send('events.subscribe', {
-              events: ['chat'],
-            }).catch(err => {
-              console.warn(`[bridge] Instance ${this.instanceId}: events.subscribe failed: ${err.message} — trying events.listen fallback`);
-              return this._send('events.listen', {
-                events: ['chat'],
-              }).catch(() => {
-                // Some gateway versions auto-deliver events to operators,
-                // so this failure may be harmless.  Log and continue.
-                console.warn(`[bridge] Instance ${this.instanceId}: events.listen also failed — events may be auto-delivered`);
-              });
-            });
           }).then(() => {
             if (this.onStateChange) this.onStateChange(this.instanceId, true);
             resolve();
+            // Modern gateways auto-deliver events to operator clients, but some
+            // older builds needed an explicit subscription.  Keep this as a
+            // best-effort legacy compatibility path without delaying connect.
+            void this._subscribeLegacyEvents();
           }).catch((err) => {
             clearTimeout(timeout);
             reject(err);
@@ -206,23 +205,68 @@ class GatewayClient {
     return this._send(method, params, timeoutMs);
   }
 
-  /** Wait for a terminal chat event matching the given sessionKey / runId. */
-  waitForChat(sessionKey, runId, timeoutMs) {
-    return new Promise((resolve, reject) => {
-      const _id = crypto.randomUUID();
-      const timer = setTimeout(() => {
-        const idx = this.chatWaiters.findIndex(w => w._id === _id);
-        if (idx !== -1) this.chatWaiters.splice(idx, 1);
-        reject(new Error(`Chat response timeout (${timeoutMs}ms)`));
-      }, timeoutMs);
-
-      const matchFn = (payload) => {
-        if (runId && payload.runId) return payload.runId === runId;
-        return payload.sessionKey === sessionKey;
-      };
-
-      this.chatWaiters.push({ matchFn, resolve, reject, timer, _id });
+  _subscribeLegacyEvents() {
+    const events = ['chat', 'chat.side_result'];
+    return this._send('events.subscribe', { events }, 5000).catch(err => {
+      console.warn(`[bridge] Instance ${this.instanceId}: events.subscribe failed: ${err.message} — trying events.listen fallback`);
+      return this._send('events.listen', { events }, 5000).catch(() => {
+        // Modern gateways auto-deliver events to operators, so these failures
+        // are expected on newer builds.
+        console.warn(`[bridge] Instance ${this.instanceId}: events.listen also failed — relying on auto-delivered events`);
+      });
     });
+  }
+
+  /** Create a waiter for a terminal chat event tied to one request. */
+  createChatWaiter(sessionKey, timeoutMs) {
+    const waiter = {
+      _id: crypto.randomUUID(),
+      sessionKey,
+      runId: null,
+      settled: false,
+      timer: null,
+      resolve: null,
+      reject: null,
+      matchFn(payload) {
+        if (waiter.runId && payload.runId) {
+          return payload.runId === waiter.runId;
+        }
+        return payload.sessionKey === waiter.sessionKey;
+      },
+    };
+
+    const removeWaiter = () => {
+      const idx = this.chatWaiters.indexOf(waiter);
+      if (idx !== -1) this.chatWaiters.splice(idx, 1);
+    };
+
+    const settle = (fn, value) => {
+      if (waiter.settled) return;
+      waiter.settled = true;
+      if (waiter.timer) clearTimeout(waiter.timer);
+      removeWaiter();
+      fn(value);
+    };
+
+    const promise = new Promise((resolve, reject) => {
+      waiter.resolve = (value) => settle(resolve, value);
+      waiter.reject = (err) => settle(reject, err);
+      waiter.timer = setTimeout(() => {
+        waiter.reject(new Error(`Chat response timeout (${timeoutMs}ms)`));
+      }, timeoutMs);
+    });
+
+    this.chatWaiters.push(waiter);
+
+    return {
+      promise,
+      setRunId(runId) {
+        waiter.runId = runId || null;
+      },
+      cancel() {
+        waiter.resolve(null);
+      },
+    };
   }
 
   _scheduleReconnect() {
@@ -303,7 +347,7 @@ async function getClient(instanceId) {
   client = new GatewayClient(
     instanceId,
     inst.host,
-    inst.port || 18790,
+    inst.port || 18789,
     inst.token,
   );
   client.onStateChange = (id, connected) => {
@@ -434,6 +478,10 @@ function sendJson(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function extractText(message) {
   if (!message) return '';
   if (typeof message === 'string') return message;
@@ -445,6 +493,164 @@ function extractText(message) {
       .join('\n');
   }
   return JSON.stringify(message);
+}
+
+function extractMessageRole(message) {
+  if (!message || typeof message !== 'object') return '';
+  return typeof message.role === 'string' ? message.role.toLowerCase() : '';
+}
+
+function extractMessageTimestamp(message) {
+  if (!message || typeof message !== 'object') return 0;
+  return typeof message.timestamp === 'number' ? message.timestamp : 0;
+}
+
+function extractAssistantMessageSignature(message) {
+  if (extractMessageRole(message) !== 'assistant') return null;
+  const text = extractText(message).trim();
+  if (!text) return null;
+  return {
+    text,
+    timestamp: extractMessageTimestamp(message),
+  };
+}
+
+function findLatestAssistantMessage(messages, baseline) {
+  if (!Array.isArray(messages)) return null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const candidate = extractAssistantMessageSignature(messages[i]);
+    if (!candidate) continue;
+    if (!baseline) return candidate;
+    if (candidate.timestamp > baseline.timestamp) return candidate;
+    if (candidate.timestamp === baseline.timestamp && candidate.text !== baseline.text) {
+      return candidate;
+    }
+    if (!candidate.timestamp && candidate.text !== baseline.text) return candidate;
+  }
+  return null;
+}
+
+async function snapshotLatestAssistantMessage(client, sessionKey) {
+  try {
+    const history = await client.request('chat.history', {
+      sessionKey,
+      limit: HISTORY_POLL_LIMIT,
+    });
+    return findLatestAssistantMessage(history?.messages, null);
+  } catch (err) {
+    console.warn(`[bridge] chat.history baseline failed for session ${sessionKey}: ${err.message}`);
+    return null;
+  }
+}
+
+async function fetchAssistantReplyFromHistory(client, sessionKey, baseline) {
+  for (let attempt = 1; attempt <= HISTORY_POLL_ATTEMPTS; attempt++) {
+    try {
+      const history = await client.request('chat.history', {
+        sessionKey,
+        limit: HISTORY_POLL_LIMIT,
+      });
+      const latest = findLatestAssistantMessage(history?.messages, baseline);
+      if (latest) return latest.text;
+    } catch (err) {
+      console.warn(
+        `[bridge] chat.history fallback failed for session ${sessionKey} ` +
+        `(attempt ${attempt}/${HISTORY_POLL_ATTEMPTS}): ${err.message}`
+      );
+    }
+    if (attempt < HISTORY_POLL_ATTEMPTS) {
+      await sleep(HISTORY_POLL_INTERVAL_MS);
+    }
+  }
+  return '';
+}
+
+function formatAgentWaitError(result) {
+  const status = typeof result?.status === 'string' ? result.status : 'error';
+  const detail = typeof result?.error === 'string' && result.error.trim() ? `: ${result.error}` : '';
+  return `agent ${status}${detail}`;
+}
+
+async function waitForBridgeReply({ client, sessionKey, runId, timeoutMs, waiter, historyBaseline }) {
+  if (!runId) {
+    const chatPayload = await waiter.promise;
+    return extractText(chatPayload?.message);
+  }
+
+  waiter.setRunId(runId);
+
+  const chatEventPromise = waiter.promise;
+  const agentWaitPromise = client.request('agent.wait', {
+    runId,
+    timeoutMs,
+  }, timeoutMs + AGENT_WAIT_TIMEOUT_PADDING_MS);
+
+  const first = await Promise.race([
+    chatEventPromise
+      .then((payload) => ({ source: 'chat', payload }))
+      .catch((error) => ({ source: 'chat-error', error })),
+    agentWaitPromise
+      .then((result) => ({ source: 'agent', result }))
+      .catch((error) => ({ source: 'agent-error', error })),
+  ]);
+
+  if (first.source === 'chat') {
+    waiter.cancel();
+    return extractText(first.payload?.message);
+  }
+
+  if (first.source === 'chat-error') {
+    let agentResult;
+    try {
+      agentResult = await agentWaitPromise;
+    } catch {
+      waiter.cancel();
+      throw first.error;
+    }
+    if (agentResult?.status !== 'ok') {
+      waiter.cancel();
+      throw first.error;
+    }
+  } else if (first.source === 'agent-error') {
+    try {
+      const chatPayload = await chatEventPromise;
+      waiter.cancel();
+      return extractText(chatPayload?.message);
+    } catch {
+      waiter.cancel();
+      throw first.error;
+    }
+  } else if (first.result?.status !== 'ok') {
+    waiter.cancel();
+    throw new Error(formatAgentWaitError(first.result));
+  }
+
+  try {
+    const latePayload = await Promise.race([
+      chatEventPromise,
+      sleep(CHAT_EVENT_GRACE_MS).then(() => null),
+    ]);
+    waiter.cancel();
+    if (latePayload) {
+      return extractText(latePayload.message);
+    }
+  } catch {
+    waiter.cancel();
+  }
+
+  const historyText = await fetchAssistantReplyFromHistory(client, sessionKey, historyBaseline);
+  console.log(
+    `[bridge] Recovered reply for run ${runId} from chat.history` +
+    (historyText ? ` (${historyText.length} chars)` : ' (empty)')
+  );
+  return historyText;
+}
+
+function resolveRequestTimeout(rawTimeoutMs, fallbackMs) {
+  if (typeof rawTimeoutMs !== 'number' || !Number.isFinite(rawTimeoutMs)) {
+    return fallbackMs;
+  }
+  return Math.max(1000, Math.floor(rawTimeoutMs));
 }
 
 // ---------------------------------------------------------------------------
@@ -472,10 +678,10 @@ const server = http.createServer(async (req, res) => {
 
     // ---- POST /send ----
     // Send a user message to an instance and wait for the agent response.
-    //   { to: N, message: "...", sessionKey?: "..." }
+    //   { to: N, message: "...", sessionKey?: "...", timeoutMs?: 120000 }
     if (req.method === 'POST' && req.url === '/send') {
       const body = await readBody(req);
-      const { to, message, sessionKey } = body;
+      const { to, message, sessionKey, timeoutMs: rawTimeoutMs } = body;
 
       if (!to || !message) {
         return sendJson(res, 400, {
@@ -486,34 +692,30 @@ const server = http.createServer(async (req, res) => {
 
       const client = await getClient(to);
       const key = sessionKey || 'main';
+      const timeoutMs = resolveRequestTimeout(rawTimeoutMs, RESPONSE_TIMEOUT);
       const idempotencyKey = crypto.randomUUID();
+      const historyBaseline = await snapshotLatestAssistantMessage(client, key);
 
       // Strategy: try chat.send with a long timeout — many gateways return
       // the AI response synchronously in the res payload.  If the gateway
-      // returns a short ack instead (no message), fall back to waiting for
-      // a chat event.
-      console.log(`[bridge] /send: sending to instance ${to}, session=${key}`);
+      // returns a short ack instead (no message), use a durable wait path:
+      // chat events first, agent.wait second, chat.history as the final fallback.
+      console.log(`[bridge] /send: sending to instance ${to}, session=${key}, timeout=${timeoutMs}ms`);
 
-      // Register event waiter as safety net (in case gateway pushes events)
-      const responsePromise = client.waitForChat(key, null, RESPONSE_TIMEOUT);
+      const waiter = client.createChatWaiter(key, timeoutMs);
 
       const sendResult = await client.request('chat.send', {
         sessionKey: key,
         message: String(message),
         idempotencyKey,
-      }, RESPONSE_TIMEOUT);
+      }, timeoutMs);
 
       console.log(`[bridge] /send: chat.send returned:`, JSON.stringify(sendResult).slice(0, 500));
 
       // Check if the response is already in the sendResult
       const syncText = extractText(sendResult?.message || sendResult?.response);
       if (syncText) {
-        // Cancel the event waiter — we already have the response
-        const idx = client.chatWaiters.length - 1;
-        if (idx >= 0) {
-          clearTimeout(client.chatWaiters[idx].timer);
-          client.chatWaiters.splice(idx, 1);
-        }
+        waiter.cancel();
         console.log(`[bridge] /send: got synchronous response (${syncText.length} chars)`);
         return sendJson(res, 200, {
           ok: true,
@@ -523,18 +725,18 @@ const server = http.createServer(async (req, res) => {
         });
       }
 
-      // No inline response — wait for chat event
-      console.log(`[bridge] /send: no inline response, waiting for chat event (runId=${sendResult?.runId || '?'})...`);
-      if (sendResult && sendResult.runId) {
-        const waiter = client.chatWaiters[client.chatWaiters.length - 1];
-        if (waiter) {
-          const runId = sendResult.runId;
-          waiter.matchFn = (payload) => payload.runId === runId;
-        }
-      }
-
-      const chatPayload = await responsePromise;
-      const text = extractText(chatPayload.message);
+      console.log(
+        `[bridge] /send: no inline response, waiting for completion ` +
+        `(runId=${sendResult?.runId || '?'})...`
+      );
+      const text = await waitForBridgeReply({
+        client,
+        sessionKey: key,
+        runId: sendResult?.runId,
+        timeoutMs,
+        waiter,
+        historyBaseline,
+      });
 
       return sendJson(res, 200, {
         ok: true,
@@ -572,10 +774,10 @@ const server = http.createServer(async (req, res) => {
     // Send a message to instance B, wait for the response, then inject it
     // back into instance A's session (e.g. a Telegram conversation).
     //   { from: N, fromSessionKey: "agent:main:telegram:direct:...",
-    //     to: M, message: "...", toSessionKey?: "..." }
+    //     to: M, message: "...", toSessionKey?: "...", timeoutMs?: 120000 }
     if (req.method === 'POST' && req.url === '/relay') {
       const body = await readBody(req);
-      const { from, fromSessionKey, to, message, toSessionKey } = body;
+      const { from, fromSessionKey, to, message, toSessionKey, timeoutMs: rawTimeoutMs } = body;
 
       if (!from || !fromSessionKey || !to || !message) {
         return sendJson(res, 400, {
@@ -587,38 +789,37 @@ const server = http.createServer(async (req, res) => {
       // Send to the target instance
       const targetClient = await getClient(to);
       const tKey = toSessionKey || 'main';
+      const timeoutMs = resolveRequestTimeout(rawTimeoutMs, RESPONSE_TIMEOUT);
       const idempotencyKey = crypto.randomUUID();
-      const responsePromise = targetClient.waitForChat(tKey, null, RESPONSE_TIMEOUT);
+      const historyBaseline = await snapshotLatestAssistantMessage(targetClient, tKey);
+      const waiter = targetClient.createChatWaiter(tKey, timeoutMs);
 
       const sendResult = await targetClient.request('chat.send', {
         sessionKey: tKey,
         message: String(message),
         idempotencyKey,
-      }, RESPONSE_TIMEOUT);
+      }, timeoutMs);
 
       console.log(`[bridge] /relay: chat.send returned:`, JSON.stringify(sendResult).slice(0, 500));
 
       // Check if the response is already in the sendResult
       let text = extractText(sendResult?.message || sendResult?.response);
       if (text) {
-        const idx = targetClient.chatWaiters.length - 1;
-        if (idx >= 0) {
-          clearTimeout(targetClient.chatWaiters[idx].timer);
-          targetClient.chatWaiters.splice(idx, 1);
-        }
+        waiter.cancel();
         console.log(`[bridge] /relay: got synchronous response (${text.length} chars)`);
       } else {
-        // Fall back to waiting for chat event
-        console.log(`[bridge] /relay: no inline response, waiting for chat event...`);
-        if (sendResult && sendResult.runId) {
-          const waiter = targetClient.chatWaiters[targetClient.chatWaiters.length - 1];
-          if (waiter) {
-            const runId = sendResult.runId;
-            waiter.matchFn = (payload) => payload.runId === runId;
-          }
-        }
-        const chatPayload = await responsePromise;
-        text = extractText(chatPayload.message);
+        console.log(
+          `[bridge] /relay: no inline response, waiting for completion ` +
+          `(runId=${sendResult?.runId || '?'})...`
+        );
+        text = await waitForBridgeReply({
+          client: targetClient,
+          sessionKey: tKey,
+          runId: sendResult?.runId,
+          timeoutMs,
+          waiter,
+          historyBaseline,
+        });
       }
 
       // Inject the response back into the source instance's session
