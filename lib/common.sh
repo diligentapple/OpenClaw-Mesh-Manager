@@ -106,9 +106,6 @@ count_openclaw_instances() {
   done
   shopt -u nullglob
 
-  if (( count < 1 )); then
-    count=1
-  fi
   echo "$count"
 }
 
@@ -116,28 +113,39 @@ resolve_gateway_runtime_memory_settings() {
   local limit_var="$1"
   local heap_var="$2"
   local instance_count="${3:-}"
-  local available_mb budget_mb limit_mb heap_mb limit_value heap_value
+  local available_mb reserve_mb budget_mb limit_mb heap_mb limit_value heap_value
 
   if [[ -z "$instance_count" || ! "$instance_count" =~ ^[0-9]+$ || "$instance_count" -lt 1 ]]; then
     instance_count=$(count_openclaw_instances)
   fi
+  if (( instance_count < 1 )); then
+    instance_count=1
+  fi
 
   available_mb=$(detect_available_mem_mb)
-  budget_mb=$((available_mb - 1024))
-  if (( budget_mb < 2048 )); then
-    budget_mb=2048
+  if (( available_mb >= 8192 )); then
+    reserve_mb=1024
+  elif (( available_mb >= 4096 )); then
+    reserve_mb=768
+  else
+    reserve_mb=512
+  fi
+
+  budget_mb=$((available_mb - reserve_mb))
+  if (( budget_mb < 1024 )); then
+    budget_mb=1024
   fi
 
   limit_mb=$((budget_mb / instance_count))
-  if (( limit_mb < 2048 )); then
-    limit_mb=2048
+  if (( limit_mb < 1024 )); then
+    limit_mb=1024
   elif (( limit_mb > 4096 )); then
     limit_mb=4096
   fi
 
-  heap_mb=$((limit_mb * 75 / 100))
-  if (( heap_mb < 1664 )); then
-    heap_mb=1664
+  heap_mb=$((limit_mb * 70 / 100))
+  if (( heap_mb < 768 )); then
+    heap_mb=768
   fi
   if (( heap_mb > limit_mb - 256 )); then
     heap_mb=$((limit_mb - 256))

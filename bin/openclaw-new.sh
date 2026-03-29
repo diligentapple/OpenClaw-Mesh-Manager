@@ -175,6 +175,13 @@ if [[ ! -f "$TEMPLATE" ]]; then
   exit 1
 fi
 
+TARGET_INSTANCE_COUNT=$(count_openclaw_instances)
+for (( i=RANGE_START; i<=RANGE_END; i++ )); do
+  if [[ ! -d "${HOME_DIR}/openclaw${i}" && ! -d "${HOME_DIR}/.openclaw${i}" ]]; then
+    ((TARGET_INSTANCE_COUNT++)) || true
+  fi
+done
+
 OPENCLAW_IMAGE="ghcr.io/openclaw/openclaw:latest"
 
 if [[ "$PULL" == true ]]; then
@@ -288,9 +295,10 @@ create_instance() {
   DATA_DIR="${HOME_DIR}/.openclaw${N}"
   CONTAINER="openclaw${N}-gateway"
   local instance_count
-  instance_count=$(count_openclaw_instances)
-  if [[ ! -d "$INSTANCE_DIR" && ! -d "$DATA_DIR" ]]; then
-    instance_count=$((instance_count + 1))
+  instance_count="${TARGET_INSTANCE_COUNT:-$(count_openclaw_instances)}"
+  local should_start_gateway=false
+  if [[ -n "$PRESET_FILE" ]]; then
+    should_start_gateway=true
   fi
 
   # Port assignment
@@ -352,8 +360,13 @@ create_instance() {
 
     docker network create "$MESH_NETWORK" 2>/dev/null || true
 
-    echo "Bringing up instance #$N..."
-    $COMPOSE_BIN -f "${INSTANCE_DIR}/docker-compose.yml" up -d
+    if [[ "$should_start_gateway" == true ]]; then
+      echo "Starting instance #$N..."
+      $COMPOSE_BIN -f "${INSTANCE_DIR}/docker-compose.yml" up -d
+    else
+      echo "Creating container for instance #$N (gateway will stay stopped until onboarding)..."
+      $COMPOSE_BIN -f "${INSTANCE_DIR}/docker-compose.yml" create
+    fi
   else
     # Fresh creation
     if port_in_use "$API_PORT" || port_in_use "$WS_PORT"; then
@@ -387,8 +400,13 @@ create_instance() {
     # Ensure the shared mesh network exists (idempotent)
     docker network create "$MESH_NETWORK" 2>/dev/null || true
 
-    echo "Bringing up instance #$N..."
-    $COMPOSE_BIN -f "${INSTANCE_DIR}/docker-compose.yml" up -d
+    if [[ "$should_start_gateway" == true ]]; then
+      echo "Starting instance #$N..."
+      $COMPOSE_BIN -f "${INSTANCE_DIR}/docker-compose.yml" up -d
+    else
+      echo "Creating container for instance #$N (gateway will stay stopped until onboarding)..."
+      $COMPOSE_BIN -f "${INSTANCE_DIR}/docker-compose.yml" create
+    fi
   fi
 
   # Create shortcut symlink: openclawN -> openclaw-exec
@@ -411,6 +429,11 @@ create_instance() {
   echo "Data      : $DATA_DIR"
   echo "API Port  : $API_PORT"
   echo "WS Port   : $WS_PORT"
+  if [[ "$should_start_gateway" == true ]]; then
+    echo "Gateway   : running"
+  else
+    echo "Gateway   : created, not started"
+  fi
   if [[ "$MESH_NETWORK" != "openclaw-net" ]]; then
     echo "Network   : $MESH_NETWORK"
   fi
@@ -469,12 +492,13 @@ else
   echo "Useful commands:"
   if [[ -z "$PRESET_FILE" ]]; then
     echo "  openclaw-onboard $RANGE_START              Run onboarding wizard"
-  fi
-  echo "  openclaw-health $RANGE_START               Health check"
-  echo "  openclaw-logs $RANGE_START                 Follow container logs"
-  echo "  openclaw${RANGE_START} <command>            Run command inside container"
-  if command -v tailscale >/dev/null 2>&1; then
-    echo "  openclaw-remote $RANGE_START               Enable remote access (Tailscale)"
+  else
+    echo "  openclaw-health $RANGE_START               Health check"
+    echo "  openclaw-logs $RANGE_START                 Follow container logs"
+    echo "  openclaw${RANGE_START} <command>            Run command inside container"
+    if command -v tailscale >/dev/null 2>&1; then
+      echo "  openclaw-remote $RANGE_START               Enable remote access (Tailscale)"
+    fi
   fi
 
   if [[ "$ONBOARD" == true ]]; then
