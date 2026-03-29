@@ -135,8 +135,7 @@ while ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER" && [[ $local_tri
 done
 
 sleep 3
-API_PORT=$(docker port "$CONTAINER" 18789/tcp 2>/dev/null | head -1 | awk -F: '{print $NF}' || true)
-if [[ -n "$API_PORT" ]] && curl -sf "http://127.0.0.1:${API_PORT}/healthz" >/dev/null 2>&1; then
+if wait_for_gateway_container_health "$CONTAINER" 30; then
   echo "Instance #$N updated and healthy."
 else
   echo "Instance #$N updated but health check failed."

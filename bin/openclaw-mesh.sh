@@ -253,9 +253,13 @@ write_bridge_info() {
 
     local data_dir="${HOME_DIR}/.openclaw${num}"
     local info_file="${data_dir}/.mesh-bridge"
+    local workspace_dir="${data_dir}/workspace"
+    local guide_file="${workspace_dir}/MESH.md"
+    mkdir -p "$workspace_dir"
     cat > "$info_file" <<MESHEOF
 # OpenClaw Mesh Bridge — auto-generated, do not edit
 # Query the bridge to discover peers and send messages.
+# Human-readable guide for agents: /home/node/.openclaw/workspace/MESH.md
 MESH_NETWORK=${NETWORK_NAME}
 BRIDGE_HOST=${BRIDGE_CONTAINER}
 BRIDGE_PORT=${BRIDGE_INTERNAL_PORT}
@@ -266,9 +270,75 @@ BRIDGE_URL=http://${BRIDGE_CONTAINER}:${BRIDGE_INTERNAL_PORT}
 #
 # Send a message to another instance:
 #   curl -s -X POST \${BRIDGE_URL}/send -H 'Content-Type: application/json' -d '{"to": N, "message": "..."}'
+
+# Relay another instance's reply back into the current user session:
+#   curl -s -X POST \${BRIDGE_URL}/relay -H 'Content-Type: application/json' \
+#     -d '{"from": ${num}, "fromSessionKey": "<current-session-key>", "to": N, "message": "..."}'
+MESHEOF
+
+    cat > "$guide_file" <<MESHEOF
+# Mesh Communication Guide
+
+This instance is on mesh network: ${NETWORK_NAME}
+Bridge URL: http://${BRIDGE_CONTAINER}:${BRIDGE_INTERNAL_PORT}
+Current instance id: ${num}
+
+Use the mesh when another instance is better suited for part of the task, or
+when you want a different instance to produce the final reply.
+
+## Discover peers
+
+\`\`\`bash
+curl -s http://${BRIDGE_CONTAINER}:${BRIDGE_INTERNAL_PORT}/instances
+\`\`\`
+
+Check which instance ids are available before sending if peer availability
+matters.
+
+## Ask another instance and wait for the reply
+
+Use \`/send\` when you want the remote instance's answer inside your own
+reasoning flow.
+
+\`\`\`bash
+curl -s -X POST http://${BRIDGE_CONTAINER}:${BRIDGE_INTERNAL_PORT}/send \\
+  -H 'Content-Type: application/json' \\
+  -d '{"to": N, "message": "...", "sessionKey": "main"}'
+\`\`\`
+
+Notes:
+- Replace \`N\` with the target instance id.
+- \`sessionKey\` is optional. Use \`main\` unless you need continuity with a
+  specific remote session.
+- Keep the message specific and include the exact output you want back.
+
+## Send work to another instance and relay the reply back to the current user
+
+Use \`/relay\` when you want another instance's answer injected back into the
+current conversation, such as a Telegram or chat session.
+
+\`\`\`bash
+curl -s -X POST http://${BRIDGE_CONTAINER}:${BRIDGE_INTERNAL_PORT}/relay \\
+  -H 'Content-Type: application/json' \\
+  -d '{"from": ${num}, "fromSessionKey": "<current-session-key>", "to": N, "message": "..."}'
+\`\`\`
+
+Notes:
+- \`from\` should be this instance id: ${num}
+- \`fromSessionKey\` should be the current conversation session key when you
+  want the remote reply delivered back to the user.
+- \`to\` is the target instance id.
+
+## Recommended usage pattern
+
+1. Call \`/instances\` to inspect peers when you are unsure who should handle a task.
+2. Use \`/send\` for delegated subtasks where you need the remote answer before continuing.
+3. Use \`/relay\` when the remote instance should answer the user directly through the current session.
+4. Include clear instructions, desired format, and relevant context in the forwarded message.
 MESHEOF
     # Match ownership to the data dir (container uid 1000)
     chown 1000:1000 "$info_file" 2>/dev/null || sudo chown 1000:1000 "$info_file" 2>/dev/null || true
+    chown 1000:1000 "$guide_file" 2>/dev/null || sudo chown 1000:1000 "$guide_file" 2>/dev/null || true
   done
 }
 
@@ -290,7 +360,11 @@ announce_roster() {
         (if .value.name and .value.name != "" then " (" + .value.name + ")" else "" end) +
         (if .value.description and .value.description != "" then " — " + .value.description else "" end)
       ] | join("\n")) +
-      "\n\nTo message another instance: curl -s -X POST http://" + $bridge + ":3000/send -H \"Content-Type: application/json\" -d \u0027{\"to\": N, \"message\": \"...\"}\u0027 " +
+      "\n\nMesh guide: /home/node/.openclaw/workspace/MESH.md" +
+      "\nUse /send when you want another instance\u0027s reply before you continue." +
+      "\nUse /relay when you want another instance\u0027s reply injected back into the current user session." +
+      "\nTo message another instance: curl -s -X POST http://" + $bridge + ":3000/send -H \"Content-Type: application/json\" -d \u0027{\"to\": N, \"message\": \"...\"}\u0027" +
+      "\nTo relay a remote reply back to the current session: curl -s -X POST http://" + $bridge + ":3000/relay -H \"Content-Type: application/json\" -d \u0027{\"from\": YOUR_INSTANCE_ID, \"fromSessionKey\": \"<current-session-key>\", \"to\": N, \"message\": \"...\"}\u0027" +
       "\nTo see all instances: curl -s http://" + $bridge + ":3000/instances"
     ' "${MESH_DIR}/config.json" 2>/dev/null || true)
   fi

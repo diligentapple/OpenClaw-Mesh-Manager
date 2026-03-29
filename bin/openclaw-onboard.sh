@@ -85,24 +85,6 @@ detect_compose_bin
 COMPOSE_FILE_DIR="${HOME_DIR}/openclaw${N}"
 ENV_FILE="${COMPOSE_FILE_DIR}/.env"
 
-wait_for_gateway_health() {
-  local api_port=""
-  local attempts="${1:-30}"
-  local i
-
-  for i in $(seq 1 "$attempts"); do
-    sleep 1
-    if [[ -z "$api_port" ]]; then
-      api_port=$(docker port "$CONTAINER" 18789/tcp 2>/dev/null | head -1 | awk -F: '{print $NF}' || true)
-    fi
-    if [[ -n "${api_port:-}" ]] && curl -sf --max-time 3 "http://127.0.0.1:${api_port}/healthz" >/dev/null 2>&1; then
-      return 0
-    fi
-  done
-
-  return 1
-}
-
 upsert_env_var "$ENV_FILE" "OPENCLAW_GATEWAY_MEMORY_LIMIT" "${OPENCLAW_GATEWAY_MEMORY_LIMIT}"
 upsert_env_var "$ENV_FILE" "OPENCLAW_GATEWAY_NODE_HEAP_MB" "${OPENCLAW_GATEWAY_NODE_HEAP_MB}"
 
@@ -175,7 +157,7 @@ else
   docker restart "$CONTAINER" >/dev/null 2>&1 || true
 fi
 
-if wait_for_gateway_health 30; then
+if wait_for_gateway_container_health "$CONTAINER" 30; then
   echo "Gateway is up."
 else
   echo "Error: gateway not responding after onboarding restart. Check: openclaw-logs $N --tail 50"
@@ -200,7 +182,7 @@ if [[ -f "$COMPOSE_FILE" ]]; then
     -f "$COMPOSE_FILE" up -d --force-recreate >/dev/null 2>&1 || true
 fi
 
-if wait_for_gateway_health 30; then
+if wait_for_gateway_container_health "$CONTAINER" 30; then
   echo "Gateway is up with LAN binding."
 else
   echo "Error: gateway failed after switching to LAN binding. Check: openclaw-logs $N --tail 50"

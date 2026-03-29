@@ -173,6 +173,43 @@ upsert_env_var() {
   fi
 }
 
+gateway_health_probe_command() {
+  cat <<'EOF'
+curl -sf --max-time 3 http://127.0.0.1:18789/healthz >/dev/null || wget -qO- --timeout=3 http://127.0.0.1:18789/healthz >/dev/null
+EOF
+}
+
+gateway_container_healthy() {
+  local container="$1"
+  local health_status=""
+
+  if ! docker inspect "$container" >/dev/null 2>&1; then
+    return 1
+  fi
+
+  health_status=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container" 2>/dev/null || true)
+  if [[ "$health_status" == "healthy" ]]; then
+    return 0
+  fi
+
+  docker exec "$container" sh -lc "$(gateway_health_probe_command)" >/dev/null 2>&1
+}
+
+wait_for_gateway_container_health() {
+  local container="$1"
+  local attempts="${2:-30}"
+  local i
+
+  for i in $(seq 1 "$attempts"); do
+    sleep 1
+    if gateway_container_healthy "$container"; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 # --- LAN gateway config ---------------------------------------------------
 # When the gateway binds to lan (non-loopback), it requires origin settings
 # in openclaw.json.  This helper patches the config so the gateway can start.

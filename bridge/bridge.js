@@ -649,8 +649,13 @@ async function broadcastRoster() {
   const roster =
     `[OpenClaw Mesh Network: ${networkName}] Connected instances:\n` +
     lines.join('\n') +
-    `\n\nTo message another instance: curl -s -X POST http://${bridgeHost}:${bridgePort}/send ` +
-    `-H "Content-Type: application/json" -d '{"to": N, "message": "..."}' ` +
+    `\n\nMesh guide: /home/node/.openclaw/workspace/MESH.md` +
+    `\nUse /send when you want another instance's reply before you continue.` +
+    `\nUse /relay when you want another instance's reply injected back into the current user session.` +
+    `\nTo message another instance: curl -s -X POST http://${bridgeHost}:${bridgePort}/send ` +
+    `-H "Content-Type: application/json" -d '{"to": N, "message": "..."}'` +
+    `\nTo relay a remote reply back to the current session: curl -s -X POST http://${bridgeHost}:${bridgePort}/relay ` +
+    `-H "Content-Type: application/json" -d '{"from": YOUR_INSTANCE_ID, "fromSessionKey": "<current-session-key>", "to": N, "message": "..."}'` +
     `\nTo see all instances: curl -s http://${bridgeHost}:${bridgePort}/instances`;
 
   console.log(`[bridge] Broadcasting roster to ${entries.length} instance(s)...`);
