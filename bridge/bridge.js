@@ -571,13 +571,20 @@ async function getClient(instanceId) {
   // Only create a new client if none exists at all.
   if (client) {
     // Client exists but not connected — try to connect it
-    await client.ensureConnected();
+    try {
+      await client.ensureConnected();
+    } catch (err) {
+      if (isConnectivityError(err)) {
+        throw wrapInstanceReachabilityError(instanceId, err);
+      }
+      throw err;
+    }
     return client;
   }
 
   const config = loadConfig();
   const inst = config.instances[key];
-  if (!inst) throw new Error(`Instance ${instanceId} not found in mesh config`);
+  if (!inst) throw httpError(404, `Instance ${instanceId} not found in mesh config`);
 
   client = new GatewayClient(
     instanceId,
@@ -595,7 +602,14 @@ async function getClient(instanceId) {
     scheduleRosterBroadcast();
   };
   clients.set(key, client);
-  await client.ensureConnected();
+  try {
+    await client.ensureConnected();
+  } catch (err) {
+    if (isConnectivityError(err)) {
+      throw wrapInstanceReachabilityError(instanceId, err);
+    }
+    throw err;
+  }
   return client;
 }
 
@@ -650,6 +664,7 @@ async function broadcastRoster() {
     `[OpenClaw Mesh Network: ${networkName}] Connected instances:\n` +
     lines.join('\n') +
     `\n\nMesh guide: /home/node/.openclaw/workspace/MESH.md` +
+    `\nOnly send to peers that show [online] / connected=true in /instances.` +
     `\nUse /send when you want another instance's reply before you continue.` +
     `\nUse /relay when you want another instance's reply injected back into the current user session.` +
     `\nTo message another instance: curl -s -X POST http://${bridgeHost}:${bridgePort}/send ` +
@@ -716,6 +731,44 @@ function readBody(req) {
 function sendJson(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(data));
+}
+
+function httpError(statusCode, message, extra = {}) {
+  const err = new Error(message);
+  err.statusCode = statusCode;
+  Object.assign(err, extra);
+  return err;
+}
+
+function isConnectivityError(err) {
+  const message = err?.message || '';
+  const code = err?.code || '';
+  return (
+    code === 'ECONNREFUSED' ||
+    code === 'ENOTFOUND' ||
+    code === 'EHOSTUNREACH' ||
+    code === 'ETIMEDOUT' ||
+    message.includes('ECONNREFUSED') ||
+    message.includes('ENOTFOUND') ||
+    message.includes('EHOSTUNREACH') ||
+    message.includes('ETIMEDOUT') ||
+    message.includes('Connection timeout')
+  );
+}
+
+function wrapInstanceReachabilityError(instanceId, err) {
+  const detail = err?.message || String(err);
+  return httpError(
+    503,
+    `Instance ${instanceId} is currently unreachable. ` +
+      `Check GET /instances and wait until it reports connected=true before retrying. ` +
+      `Underlying error: ${detail}`,
+    {
+      instanceId: Number(instanceId),
+      code: 'INSTANCE_UNREACHABLE',
+      causeMessage: detail,
+    },
+  );
 }
 
 function sleep(ms) {
@@ -1089,7 +1142,12 @@ const server = http.createServer(async (req, res) => {
     });
   } catch (err) {
     console.error('[bridge] Error:', err.message);
-    sendJson(res, 500, { ok: false, error: err.message });
+    sendJson(res, err.statusCode || 500, {
+      ok: false,
+      error: err.message,
+      ...(err.code ? { code: err.code } : {}),
+      ...(err.instanceId ? { instanceId: err.instanceId } : {}),
+    });
   }
 });
 

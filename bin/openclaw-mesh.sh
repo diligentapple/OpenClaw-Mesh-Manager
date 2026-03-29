@@ -294,6 +294,9 @@ curl -s http://${BRIDGE_CONTAINER}:${BRIDGE_INTERNAL_PORT}/instances
 
 Check which instance ids are available before sending if peer availability
 matters.
+Only send to peers where \`connected\` is \`true\`.
+If a peer shows \`connected: false\`, do not call \`/send\` or \`/relay\` yet.
+Report that the peer is offline or unreachable and ask for it to be started or repaired first.
 
 ## Ask another instance and wait for the reply
 
@@ -361,6 +364,7 @@ announce_roster() {
         (if .value.description and .value.description != "" then " — " + .value.description else "" end)
       ] | join("\n")) +
       "\n\nMesh guide: /home/node/.openclaw/workspace/MESH.md" +
+      "\nOnly send to peers that report connected=true in /instances." +
       "\nUse /send when you want another instance\u0027s reply before you continue." +
       "\nUse /relay when you want another instance\u0027s reply injected back into the current user session." +
       "\nTo message another instance: curl -s -X POST http://" + $bridge + ":3000/send -H \"Content-Type: application/json\" -d \u0027{\"to\": N, \"message\": \"...\"}\u0027" +
