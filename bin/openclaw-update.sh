@@ -28,7 +28,9 @@ if sudo test -f "$CONFIG" 2>/dev/null; then
   echo "Config backed up to $backup"
 fi
 
-resolve_gateway_runtime_memory_settings OPENCLAW_GATEWAY_MEMORY_LIMIT OPENCLAW_GATEWAY_NODE_HEAP_MB
+# openclaw-update stops the other gateways first, so size the recreated target
+# as a single active gateway rather than dividing by every created instance.
+resolve_gateway_runtime_memory_settings OPENCLAW_GATEWAY_MEMORY_LIMIT OPENCLAW_GATEWAY_NODE_HEAP_MB 1
 ENV_FILE="${INSTANCE_DIR}/.env"
 upsert_env_var "$ENV_FILE" "OPENCLAW_GATEWAY_MEMORY_LIMIT" "${OPENCLAW_GATEWAY_MEMORY_LIMIT}"
 upsert_env_var "$ENV_FILE" "OPENCLAW_GATEWAY_NODE_HEAP_MB" "${OPENCLAW_GATEWAY_NODE_HEAP_MB}"

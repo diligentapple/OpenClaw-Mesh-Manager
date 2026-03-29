@@ -42,10 +42,22 @@ for cname in $(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^openclaw[
   STOPPED_GATEWAYS+=("$cname")
 done
 
+restart_stopped_gateways() {
+  local cname
+  for cname in "${STOPPED_GATEWAYS[@]+"${STOPPED_GATEWAYS[@]}"}"; do
+    [[ "$cname" == "$CONTAINER" ]] && continue
+    echo "Restarting $cname..."
+    docker start "$cname" >/dev/null 2>&1 || true
+  done
+}
+
 resolve_container_memory_settings OPENCLAW_ONBOARD_MEMORY_LIMIT OPENCLAW_ONBOARD_NODE_HEAP_MB
 echo "Onboarding container memory limit: ${OPENCLAW_ONBOARD_MEMORY_LIMIT} (Node heap: ${OPENCLAW_ONBOARD_NODE_HEAP_MB} MB)"
 
-resolve_gateway_runtime_memory_settings OPENCLAW_GATEWAY_MEMORY_LIMIT OPENCLAW_GATEWAY_NODE_HEAP_MB
+# During onboarding we restart only the target gateway. Size it for one active
+# gateway instead of all created instances, or small hosts can under-allocate
+# and crash immediately after the wizard completes.
+resolve_gateway_runtime_memory_settings OPENCLAW_GATEWAY_MEMORY_LIMIT OPENCLAW_GATEWAY_NODE_HEAP_MB 1
 echo "Gateway runtime memory limit: ${OPENCLAW_GATEWAY_MEMORY_LIMIT} (Node heap: ${OPENCLAW_GATEWAY_NODE_HEAP_MB} MB)"
 
 # Run onboarding in a *separate* one-off container that shares the data volume.
@@ -72,6 +84,24 @@ COMPOSE_FILE="${HOME_DIR}/openclaw${N}/docker-compose.yml"
 detect_compose_bin
 COMPOSE_FILE_DIR="${HOME_DIR}/openclaw${N}"
 ENV_FILE="${COMPOSE_FILE_DIR}/.env"
+
+wait_for_gateway_health() {
+  local api_port=""
+  local attempts="${1:-30}"
+  local i
+
+  for i in $(seq 1 "$attempts"); do
+    sleep 1
+    if [[ -z "$api_port" ]]; then
+      api_port=$(docker port "$CONTAINER" 18789/tcp 2>/dev/null | head -1 | awk -F: '{print $NF}' || true)
+    fi
+    if [[ -n "${api_port:-}" ]] && curl -sf --max-time 3 "http://127.0.0.1:${api_port}/healthz" >/dev/null 2>&1; then
+      return 0
+    fi
+  done
+
+  return 1
+}
 
 upsert_env_var "$ENV_FILE" "OPENCLAW_GATEWAY_MEMORY_LIMIT" "${OPENCLAW_GATEWAY_MEMORY_LIMIT}"
 upsert_env_var "$ENV_FILE" "OPENCLAW_GATEWAY_NODE_HEAP_MB" "${OPENCLAW_GATEWAY_NODE_HEAP_MB}"
@@ -145,23 +175,13 @@ else
   docker restart "$CONTAINER" >/dev/null 2>&1 || true
 fi
 
-# Wait for the container to come back up and respond.
-# Re-query docker port each iteration because after force-recreate the
-# container needs a moment before port mappings are available.
-API_PORT=""
-for i in $(seq 1 20); do
-  sleep 1
-  if [[ -z "$API_PORT" ]]; then
-    API_PORT=$(docker port "$CONTAINER" 18789/tcp 2>/dev/null | head -1 | awk -F: '{print $NF}' || true)
-  fi
-  if [[ -n "${API_PORT:-}" ]] && curl -sf --max-time 3 "http://127.0.0.1:${API_PORT}/healthz" >/dev/null 2>&1; then
-    echo "Gateway is up."
-    break
-  fi
-  if [[ "$i" -eq 20 ]]; then
-    echo "Warning: gateway not responding after 20s. Check: openclaw-logs $N --tail 20"
-  fi
-done
+if wait_for_gateway_health 30; then
+  echo "Gateway is up."
+else
+  echo "Error: gateway not responding after onboarding restart. Check: openclaw-logs $N --tail 50"
+  restart_stopped_gateways
+  exit 1
+fi
 
 # Enable insecure auth and host-header origin fallback so the gateway
 # can run with BIND=lan (required for mesh networking) without needing
@@ -180,12 +200,16 @@ if [[ -f "$COMPOSE_FILE" ]]; then
     -f "$COMPOSE_FILE" up -d --force-recreate >/dev/null 2>&1 || true
 fi
 
+if wait_for_gateway_health 30; then
+  echo "Gateway is up with LAN binding."
+else
+  echo "Error: gateway failed after switching to LAN binding. Check: openclaw-logs $N --tail 50"
+  restart_stopped_gateways
+  exit 1
+fi
+
 # Restart any other gateways that were stopped to free memory
-for cname in "${STOPPED_GATEWAYS[@]+"${STOPPED_GATEWAYS[@]}"}"; do
-  [[ "$cname" == "$CONTAINER" ]] && continue  # already recreated above
-  echo "Restarting $cname..."
-  docker start "$cname" >/dev/null 2>&1 || true
-done
+restart_stopped_gateways
 
 # Start or refresh the mesh bridge now that this instance is onboarded
 # and the gateway is running. This is where mesh setup belongs — not during
