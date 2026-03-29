@@ -94,6 +94,9 @@ for cname in $(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^openclaw[
   STOPPED_GATEWAYS+=("$cname")
 done
 
+resolve_container_memory_settings OPENCLAW_UPDATE_MEMORY_LIMIT OPENCLAW_UPDATE_NODE_HEAP_MB
+echo "Doctor container memory limit: ${OPENCLAW_UPDATE_MEMORY_LIMIT} (Node heap: ${OPENCLAW_UPDATE_NODE_HEAP_MB} MB)"
+
 # Remove stale lock/pid files from data dir before starting
 rm -f "${DATA_DIR}"/*.lock "${DATA_DIR}"/*.pid 2>/dev/null || true
 
@@ -106,10 +109,10 @@ docker pull ghcr.io/openclaw/openclaw:latest
 echo "Running config migration (doctor)..."
 docker run --rm \
   --init \
-  --memory 2g \
+  --memory "${OPENCLAW_UPDATE_MEMORY_LIMIT}" \
   --no-healthcheck \
   -e HOME=/home/node \
-  -e "NODE_OPTIONS=--max-old-space-size=1536" \
+  -e "NODE_OPTIONS=--max-old-space-size=${OPENCLAW_UPDATE_NODE_HEAP_MB}" \
   -v "${DATA_DIR}:/home/node/.openclaw" \
   ghcr.io/openclaw/openclaw:latest \
   node dist/index.js doctor 2>/dev/null || true

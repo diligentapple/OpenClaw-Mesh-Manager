@@ -42,17 +42,20 @@ for cname in $(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^openclaw[
   STOPPED_GATEWAYS+=("$cname")
 done
 
+resolve_container_memory_settings OPENCLAW_ONBOARD_MEMORY_LIMIT OPENCLAW_ONBOARD_NODE_HEAP_MB
+echo "Onboarding container memory limit: ${OPENCLAW_ONBOARD_MEMORY_LIMIT} (Node heap: ${OPENCLAW_ONBOARD_NODE_HEAP_MB} MB)"
+
 # Run onboarding in a *separate* one-off container that shares the data volume.
 # This avoids the gateway's file-watcher restarting the container mid-wizard and
 # killing the interactive exec session (the root cause of the "exits after
 # channel selection" bug).
 docker run --rm -it \
   --init \
-  --memory 2g \
+  --memory "${OPENCLAW_ONBOARD_MEMORY_LIMIT}" \
   -e HOME=/home/node \
   -e TERM=xterm-256color \
   -e NPM_CONFIG_PREFIX=/home/node/.npm-global \
-  -e "NODE_OPTIONS=--max-old-space-size=1536" \
+  -e "NODE_OPTIONS=--max-old-space-size=${OPENCLAW_ONBOARD_NODE_HEAP_MB}" \
   -e PATH=/home/node/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   --no-healthcheck \
   -v "${DATA_DIR}:/home/node/.openclaw" \

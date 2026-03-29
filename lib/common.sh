@@ -38,6 +38,60 @@ exec_docker() {
   fi
 }
 
+# --- Memory sizing --------------------------------------------------------
+# Resolve one-off container limits from host memory instead of pinning every
+# workflow to the same low ceiling. This avoids V8 OOMs on onboarding/update
+# runs while still leaving headroom for the host and Docker daemon.
+
+detect_available_mem_mb() {
+  local mem_kb=""
+  if [[ -r /proc/meminfo ]]; then
+    mem_kb=$(awk '/^MemAvailable:/ { print $2; exit }' /proc/meminfo 2>/dev/null || true)
+    [[ -n "$mem_kb" ]] || mem_kb=$(awk '/^MemTotal:/ { print $2; exit }' /proc/meminfo 2>/dev/null || true)
+  fi
+  if [[ -z "$mem_kb" || ! "$mem_kb" =~ ^[0-9]+$ || "$mem_kb" -le 0 ]]; then
+    echo 4096
+    return
+  fi
+  echo $((mem_kb / 1024))
+}
+
+resolve_container_memory_settings() {
+  local limit_var="$1"
+  local heap_var="$2"
+  local min_mb="${3:-2048}"
+  local max_mb="${4:-6144}"
+  local reserve_mb="${5:-1024}"
+  local heap_pct="${6:-80}"
+  local heap_floor_mb="${7:-1536}"
+  local headroom_mb="${8:-256}"
+  local available_mb limit_mb heap_mb limit_value heap_value
+
+  available_mb=$(detect_available_mem_mb)
+  limit_mb=$((available_mb - reserve_mb))
+  if (( limit_mb < min_mb )); then
+    limit_mb=$min_mb
+  elif (( limit_mb > max_mb )); then
+    limit_mb=$max_mb
+  fi
+
+  heap_mb=$((limit_mb * heap_pct / 100))
+  if (( heap_mb < heap_floor_mb )); then
+    heap_mb=$heap_floor_mb
+  fi
+  if (( heap_mb > limit_mb - headroom_mb )); then
+    heap_mb=$((limit_mb - headroom_mb))
+  fi
+  if (( heap_mb < 256 )); then
+    heap_mb=256
+  fi
+
+  limit_value="${!limit_var:-${limit_mb}m}"
+  heap_value="${!heap_var:-${heap_mb}}"
+  printf -v "$limit_var" '%s' "$limit_value"
+  printf -v "$heap_var" '%s' "$heap_value"
+}
+
 # --- LAN gateway config ---------------------------------------------------
 # When the gateway binds to lan (non-loopback), it requires origin settings
 # in openclaw.json.  This helper patches the config so the gateway can start.
