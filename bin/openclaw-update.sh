@@ -28,24 +28,26 @@ if sudo test -f "$CONFIG" 2>/dev/null; then
   echo "Config backed up to $backup"
 fi
 
+resolve_gateway_runtime_memory_settings OPENCLAW_GATEWAY_MEMORY_LIMIT OPENCLAW_GATEWAY_NODE_HEAP_MB
+ENV_FILE="${INSTANCE_DIR}/.env"
+upsert_env_var "$ENV_FILE" "OPENCLAW_GATEWAY_MEMORY_LIMIT" "${OPENCLAW_GATEWAY_MEMORY_LIMIT}"
+upsert_env_var "$ENV_FILE" "OPENCLAW_GATEWAY_NODE_HEAP_MB" "${OPENCLAW_GATEWAY_NODE_HEAP_MB}"
+
 # Patch existing compose files to fix OOM issues (same as openclaw-onboard)
 python3 - "$COMPOSE_FILE" <<'PYEOF' || true
 import re, sys
 text = open(sys.argv[1]).read()
-if '--max-old-space-size' not in text:
-    text = text.replace('"node",\n        "dist/index.js"', '"node",\n        "--max-old-space-size=1536",\n        "dist/index.js"')
-else:
-    text = re.sub(r'--max-old-space-size=\d+', '--max-old-space-size=1536', text)
+text = re.sub(r'--max-old-space-size=\d+', '--max-old-space-size=${OPENCLAW_GATEWAY_NODE_HEAP_MB:-3072}', text)
 if 'deploy:' in text:
-    text = re.sub(r'\n    deploy:\n      resources:\n        limits:\n          memory:\s*\S+\n', '\n    mem_limit: 2g\n', text)
+    text = re.sub(r'\n    deploy:\n      resources:\n        limits:\n          memory:\s*\S+\n', '\n    mem_limit: ${OPENCLAW_GATEWAY_MEMORY_LIMIT:-4g}\n', text)
 if 'mem_limit' in text:
-    text = re.sub(r'mem_limit:\s*\S+', 'mem_limit: 2g', text)
+    text = re.sub(r'mem_limit:\s*\S+', 'mem_limit: ${OPENCLAW_GATEWAY_MEMORY_LIMIT:-4g}', text)
 else:
-    text = text.replace('\n    init: true\n', '\n    init: true\n    mem_limit: 2g\n')
+    text = text.replace('\n    init: true\n', '\n    init: true\n    mem_limit: ${OPENCLAW_GATEWAY_MEMORY_LIMIT:-4g}\n')
 if 'NODE_OPTIONS' not in text:
-    text = text.replace('      PATH:', '      NODE_OPTIONS: "--max-old-space-size=1536"\n      PATH:')
+    text = text.replace('      PATH:', '      NODE_OPTIONS: "--max-old-space-size=${OPENCLAW_GATEWAY_NODE_HEAP_MB:-3072}"\n      PATH:')
 else:
-    text = re.sub(r'NODE_OPTIONS:.*', 'NODE_OPTIONS: "--max-old-space-size=1536"', text)
+    text = re.sub(r'NODE_OPTIONS:.*', 'NODE_OPTIONS: "--max-old-space-size=${OPENCLAW_GATEWAY_NODE_HEAP_MB:-3072}"', text)
 text = re.sub(
     r'healthcheck:.*?start_period:\s*\S+',
     'healthcheck:\n'
@@ -63,7 +65,7 @@ ENTRYPOINT_BLOCK = (
     '        "-c",\n'
     '        "rm -f /home/node/.openclaw/*.lock /home/node/.openclaw/*.pid 2>/dev/null;'
     ' START=$$(date +%s);'
-    ' node --max-old-space-size=1536 dist/index.js gateway'
+    ' node --max-old-space-size=${OPENCLAW_GATEWAY_NODE_HEAP_MB:-3072} dist/index.js gateway'
     ' --bind ${OPENCLAW_GATEWAY_BIND:-loopback} --port 18789 --allow-unconfigured;'
     ' EXIT=$$?; ELAPSED=$$(($$(date +%s) - START));'
     ' if [ $$ELAPSED -lt 10 ]; then'
@@ -96,6 +98,8 @@ done
 
 resolve_container_memory_settings OPENCLAW_UPDATE_MEMORY_LIMIT OPENCLAW_UPDATE_NODE_HEAP_MB
 echo "Doctor container memory limit: ${OPENCLAW_UPDATE_MEMORY_LIMIT} (Node heap: ${OPENCLAW_UPDATE_NODE_HEAP_MB} MB)"
+
+echo "Gateway runtime memory limit: ${OPENCLAW_GATEWAY_MEMORY_LIMIT} (Node heap: ${OPENCLAW_GATEWAY_NODE_HEAP_MB} MB)"
 
 # Remove stale lock/pid files from data dir before starting
 rm -f "${DATA_DIR}"/*.lock "${DATA_DIR}"/*.pid 2>/dev/null || true

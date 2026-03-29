@@ -344,6 +344,8 @@ start_bridge() {
     exit 1
   fi
 
+  mkdir -p "${MESH_DIR}/state"
+
   docker run -d \
     --name "$BRIDGE_CONTAINER" \
     --network "$NETWORK_NAME" \
@@ -354,13 +356,98 @@ start_bridge() {
     -p "127.0.0.1:${BRIDGE_INTERNAL_PORT}:${BRIDGE_INTERNAL_PORT}" \
     -v "${MESH_DIR}/bridge.js:/bridge/bridge.js:ro" \
     -v "${MESH_DIR}/config.json:/data/config.json:ro" \
+    -v "${MESH_DIR}/state:/data/state" \
     -e BRIDGE_PORT="$BRIDGE_INTERNAL_PORT" \
+    -e BRIDGE_STATE_DIR=/data/state \
     -e RESPONSE_TIMEOUT=120000 \
     -e NODE_PATH=/app/node_modules \
     ghcr.io/openclaw/openclaw:latest \
     node /bridge/bridge.js
 
   echo "Bridge container started: $BRIDGE_CONTAINER"
+}
+
+approve_bridge_pairings() {
+  [[ -f "${MESH_DIR}/config.json" ]] || return 0
+
+  local bridge_device_id
+  bridge_device_id=$(python3 - "${MESH_DIR}/state/identity/device.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+if not path.exists():
+    raise SystemExit(0)
+try:
+    print(json.loads(path.read_text()).get("deviceId", ""))
+except Exception:
+    pass
+PY
+)
+  [[ -n "$bridge_device_id" ]] || return 0
+
+  local approvals=0
+  local entries
+  entries=$(python3 - "${MESH_DIR}/config.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+if not path.exists():
+    raise SystemExit(0)
+try:
+    cfg = json.loads(path.read_text())
+except Exception:
+    raise SystemExit(0)
+for key, value in (cfg.get("instances") or {}).items():
+    host = (value or {}).get("host")
+    if key and host:
+        print(f"{key}\t{host}")
+PY
+)
+  [[ -n "$entries" ]] || return 0
+
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    (( attempt > 1 )) && sleep 3
+
+    while IFS=$'\t' read -r inst_id host; do
+      [[ -n "$inst_id" && -n "$host" ]] || continue
+
+      local device_json request_ids request_id
+      device_json=$(docker exec "$host" sh -lc 'node dist/index.js devices list --json 2>/dev/null' 2>/dev/null || true)
+      request_ids=$(DEVICE_JSON="$device_json" BRIDGE_DEVICE_ID="$bridge_device_id" python3 - <<'PY'
+import json, os, sys
+raw = os.environ.get("DEVICE_JSON", "").strip()
+if not raw:
+    raise SystemExit(0)
+try:
+    payload = json.loads(raw)
+except Exception:
+    raise SystemExit(0)
+target = os.environ.get("BRIDGE_DEVICE_ID", "")
+for item in payload.get("pending") or []:
+    if item.get("deviceId") == target and item.get("clientMode") == "backend":
+        request_id = item.get("requestId")
+        if request_id:
+            print(request_id)
+PY
+)
+
+      [[ -n "$request_ids" ]] || continue
+
+      while IFS= read -r request_id; do
+        [[ -n "$request_id" ]] || continue
+        if docker exec "$host" sh -lc "node dist/index.js devices approve '$request_id' --json >/dev/null 2>&1"; then
+          echo "Approved mesh-bridge pairing on instance #${inst_id}"
+          approvals=$((approvals + 1))
+        fi
+      done <<< "$request_ids"
+    done <<< "$entries"
+
+    [[ "$approvals" -gt 0 ]] && break
+  done
+
+  if [[ "$approvals" -gt 0 ]]; then
+    docker restart "$BRIDGE_CONTAINER" >/dev/null 2>&1 || true
+    echo "Bridge restarted after approving $approvals mesh-bridge pairing request(s)"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -380,6 +467,7 @@ cmd_start() {
   write_bridge_info
   echo ""
   start_bridge
+  approve_bridge_pairings
   echo ""
   # Roster announcement is now handled automatically by the bridge itself.
   # When each instance connects via WebSocket, the bridge detects the state
@@ -478,12 +566,9 @@ cmd_refresh() {
   write_bridge_info
   echo ""
 
-  if docker ps --format '{{.Names}}' | grep -qx "$BRIDGE_CONTAINER"; then
-    docker restart "$BRIDGE_CONTAINER"
-    echo "Bridge restarted with updated config"
-  else
-    start_bridge
-  fi
+  start_bridge
+  approve_bridge_pairings
+  echo "Bridge restarted with updated config"
 
   # Roster announcement is handled automatically by the bridge on reconnect.
 }

@@ -92,6 +92,79 @@ resolve_container_memory_settings() {
   printf -v "$heap_var" '%s' "$heap_value"
 }
 
+count_openclaw_instances() {
+  local home_dir="${1:-${HOME:-/root}}"
+  local count=0 dir base num
+
+  shopt -s nullglob
+  for dir in "${home_dir}"/openclaw[0-9]*; do
+    [[ -d "$dir" ]] || continue
+    base=$(basename "$dir")
+    num="${base#openclaw}"
+    [[ "$num" =~ ^[0-9]+$ ]] || continue
+    ((count++))
+  done
+  shopt -u nullglob
+
+  if (( count < 1 )); then
+    count=1
+  fi
+  echo "$count"
+}
+
+resolve_gateway_runtime_memory_settings() {
+  local limit_var="$1"
+  local heap_var="$2"
+  local instance_count="${3:-}"
+  local available_mb budget_mb limit_mb heap_mb limit_value heap_value
+
+  if [[ -z "$instance_count" || ! "$instance_count" =~ ^[0-9]+$ || "$instance_count" -lt 1 ]]; then
+    instance_count=$(count_openclaw_instances)
+  fi
+
+  available_mb=$(detect_available_mem_mb)
+  budget_mb=$((available_mb - 1024))
+  if (( budget_mb < 2048 )); then
+    budget_mb=2048
+  fi
+
+  limit_mb=$((budget_mb / instance_count))
+  if (( limit_mb < 2048 )); then
+    limit_mb=2048
+  elif (( limit_mb > 4096 )); then
+    limit_mb=4096
+  fi
+
+  heap_mb=$((limit_mb * 75 / 100))
+  if (( heap_mb < 1664 )); then
+    heap_mb=1664
+  fi
+  if (( heap_mb > limit_mb - 256 )); then
+    heap_mb=$((limit_mb - 256))
+  fi
+  if (( heap_mb < 256 )); then
+    heap_mb=256
+  fi
+
+  limit_value="${!limit_var:-${limit_mb}m}"
+  heap_value="${!heap_var:-${heap_mb}}"
+  printf -v "$limit_var" '%s' "$limit_value"
+  printf -v "$heap_var" '%s' "$heap_value"
+}
+
+upsert_env_var() {
+  local env_file="$1"
+  local key="$2"
+  local value="$3"
+
+  touch "$env_file"
+  if grep -qE "^${key}=" "$env_file"; then
+    sed -i "s#^${key}=.*#${key}=${value}#" "$env_file"
+  else
+    printf '%s=%s\n' "$key" "$value" >> "$env_file"
+  fi
+}
+
 # --- LAN gateway config ---------------------------------------------------
 # When the gateway binds to lan (non-loopback), it requires origin settings
 # in openclaw.json.  This helper patches the config so the gateway can start.

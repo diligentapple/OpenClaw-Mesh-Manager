@@ -69,6 +69,22 @@ render_template() {
     "$tmpl" > "$out"
 }
 
+write_gateway_env() {
+  local env_file="$1"
+  local gw_token="$2"
+  local gateway_bind="${3:-loopback}"
+  local instance_count="$4"
+
+  resolve_gateway_runtime_memory_settings OPENCLAW_GATEWAY_MEMORY_LIMIT OPENCLAW_GATEWAY_NODE_HEAP_MB "$instance_count"
+
+  cat > "$env_file" <<ENVEOF
+OPENCLAW_GATEWAY_TOKEN=${gw_token}
+OPENCLAW_GATEWAY_BIND=${gateway_bind}
+OPENCLAW_GATEWAY_MEMORY_LIMIT=${OPENCLAW_GATEWAY_MEMORY_LIMIT}
+OPENCLAW_GATEWAY_NODE_HEAP_MB=${OPENCLAW_GATEWAY_NODE_HEAP_MB}
+ENVEOF
+}
+
 PULL=false
 CUSTOM_PORT=""
 ONBOARD=false
@@ -271,6 +287,11 @@ create_instance() {
   INSTANCE_DIR="${HOME_DIR}/openclaw${N}"
   DATA_DIR="${HOME_DIR}/.openclaw${N}"
   CONTAINER="openclaw${N}-gateway"
+  local instance_count
+  instance_count=$(count_openclaw_instances)
+  if [[ ! -d "$INSTANCE_DIR" && ! -d "$DATA_DIR" ]]; then
+    instance_count=$((instance_count + 1))
+  fi
 
   # Port assignment
   if [[ -n "$CUSTOM_PORT" ]]; then
@@ -319,10 +340,11 @@ create_instance() {
     if [[ ! -f "${INSTANCE_DIR}/.env" ]]; then
       local gw_token
       gw_token=$(gen_token)
-      cat > "${INSTANCE_DIR}/.env" <<ENVEOF
-OPENCLAW_GATEWAY_TOKEN=${gw_token}
-OPENCLAW_GATEWAY_BIND=loopback
-ENVEOF
+      write_gateway_env "${INSTANCE_DIR}/.env" "$gw_token" "loopback" "$instance_count"
+    else
+      resolve_gateway_runtime_memory_settings OPENCLAW_GATEWAY_MEMORY_LIMIT OPENCLAW_GATEWAY_NODE_HEAP_MB "$instance_count"
+      upsert_env_var "${INSTANCE_DIR}/.env" "OPENCLAW_GATEWAY_MEMORY_LIMIT" "${OPENCLAW_GATEWAY_MEMORY_LIMIT}"
+      upsert_env_var "${INSTANCE_DIR}/.env" "OPENCLAW_GATEWAY_NODE_HEAP_MB" "${OPENCLAW_GATEWAY_NODE_HEAP_MB}"
     fi
 
     # Update mesh network assignment if --mesh was given
@@ -360,10 +382,7 @@ ENVEOF
     # when the full config is written.
     local gw_token
     gw_token=$(gen_token)
-    cat > "${INSTANCE_DIR}/.env" <<ENVEOF
-OPENCLAW_GATEWAY_TOKEN=${gw_token}
-OPENCLAW_GATEWAY_BIND=loopback
-ENVEOF
+    write_gateway_env "${INSTANCE_DIR}/.env" "$gw_token" "loopback" "$instance_count"
 
     # Ensure the shared mesh network exists (idempotent)
     docker network create "$MESH_NETWORK" 2>/dev/null || true

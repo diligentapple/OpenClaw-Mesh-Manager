@@ -45,6 +45,9 @@ done
 resolve_container_memory_settings OPENCLAW_ONBOARD_MEMORY_LIMIT OPENCLAW_ONBOARD_NODE_HEAP_MB
 echo "Onboarding container memory limit: ${OPENCLAW_ONBOARD_MEMORY_LIMIT} (Node heap: ${OPENCLAW_ONBOARD_NODE_HEAP_MB} MB)"
 
+resolve_gateway_runtime_memory_settings OPENCLAW_GATEWAY_MEMORY_LIMIT OPENCLAW_GATEWAY_NODE_HEAP_MB
+echo "Gateway runtime memory limit: ${OPENCLAW_GATEWAY_MEMORY_LIMIT} (Node heap: ${OPENCLAW_GATEWAY_NODE_HEAP_MB} MB)"
+
 # Run onboarding in a *separate* one-off container that shares the data volume.
 # This avoids the gateway's file-watcher restarting the container mid-wizard and
 # killing the interactive exec session (the root cause of the "exits after
@@ -67,34 +70,34 @@ docker run --rm -it \
 echo "Restarting gateway to apply new configuration..."
 COMPOSE_FILE="${HOME_DIR}/openclaw${N}/docker-compose.yml"
 detect_compose_bin
+COMPOSE_FILE_DIR="${HOME_DIR}/openclaw${N}"
+ENV_FILE="${COMPOSE_FILE_DIR}/.env"
+
+upsert_env_var "$ENV_FILE" "OPENCLAW_GATEWAY_MEMORY_LIMIT" "${OPENCLAW_GATEWAY_MEMORY_LIMIT}"
+upsert_env_var "$ENV_FILE" "OPENCLAW_GATEWAY_NODE_HEAP_MB" "${OPENCLAW_GATEWAY_NODE_HEAP_MB}"
 
 # Patch existing compose files to fix OOM issues:
-#  1. Add/update --max-old-space-size=1536 in node command (entrypoint can override NODE_OPTIONS env)
+#  1. Move runtime memory settings to .env-backed compose variables
 #  2. Replace deploy.resources (swarm-only) with mem_limit (works standalone)
 #  3. Replace node-based healthcheck with lightweight curl/wget
 if [[ -f "$COMPOSE_FILE" ]]; then
   python3 - "$COMPOSE_FILE" <<'PYEOF' || true
 import re, sys
 text = open(sys.argv[1]).read()
-# 1. Add or update --max-old-space-size in node command
-if '--max-old-space-size' not in text:
-    text = text.replace('"node",\n        "dist/index.js"', '"node",\n        "--max-old-space-size=1536",\n        "dist/index.js"')
-else:
-    text = re.sub(r'--max-old-space-size=\d+', '--max-old-space-size=1536', text)
+# 1. Move runtime memory settings to compose env vars
+text = re.sub(r'--max-old-space-size=\d+', '--max-old-space-size=${OPENCLAW_GATEWAY_NODE_HEAP_MB:-3072}', text)
+text = re.sub(r'NODE_OPTIONS:.*', 'NODE_OPTIONS: "--max-old-space-size=${OPENCLAW_GATEWAY_NODE_HEAP_MB:-3072}"', text)
+if 'NODE_OPTIONS' not in text:
+    text = text.replace('      PATH:', '      NODE_OPTIONS: "--max-old-space-size=${OPENCLAW_GATEWAY_NODE_HEAP_MB:-3072}"\n      PATH:')
 # 2. Replace deploy.resources block with mem_limit
 if 'deploy:' in text:
-    text = re.sub(r'\n    deploy:\n      resources:\n        limits:\n          memory:\s*\S+\n', '\n    mem_limit: 2g\n', text)
+    text = re.sub(r'\n    deploy:\n      resources:\n        limits:\n          memory:\s*\S+\n', '\n    mem_limit: ${OPENCLAW_GATEWAY_MEMORY_LIMIT:-4g}\n', text)
 # Update existing mem_limit or add it
 if 'mem_limit' in text:
-    text = re.sub(r'mem_limit:\s*\S+', 'mem_limit: 2g', text)
+    text = re.sub(r'mem_limit:\s*\S+', 'mem_limit: ${OPENCLAW_GATEWAY_MEMORY_LIMIT:-4g}', text)
 else:
-    text = text.replace('\n    init: true\n', '\n    init: true\n    mem_limit: 2g\n')
-# 3. Add or update NODE_OPTIONS env
-if 'NODE_OPTIONS' not in text:
-    text = text.replace('      PATH:', '      NODE_OPTIONS: "--max-old-space-size=1536"\n      PATH:')
-else:
-    text = re.sub(r'NODE_OPTIONS:.*', 'NODE_OPTIONS: "--max-old-space-size=1536"', text)
-# 4. Replace node-based healthcheck with curl/wget
+    text = text.replace('\n    init: true\n', '\n    init: true\n    mem_limit: ${OPENCLAW_GATEWAY_MEMORY_LIMIT:-4g}\n')
+# 3. Replace node-based healthcheck with curl/wget
 text = re.sub(
     r'healthcheck:.*?start_period:\s*\S+',
     'healthcheck:\n'
@@ -112,7 +115,7 @@ ENTRYPOINT_BLOCK = (
     '        "-c",\n'
     '        "rm -f /home/node/.openclaw/*.lock /home/node/.openclaw/*.pid 2>/dev/null;'
     ' START=$$(date +%s);'
-    ' node --max-old-space-size=1536 dist/index.js gateway'
+    ' node --max-old-space-size=${OPENCLAW_GATEWAY_NODE_HEAP_MB:-3072} dist/index.js gateway'
     ' --bind ${OPENCLAW_GATEWAY_BIND:-loopback} --port 18789 --allow-unconfigured;'
     ' EXIT=$$?; ELAPSED=$$(($$(date +%s) - START));'
     ' if [ $$ELAPSED -lt 10 ]; then'
@@ -167,8 +170,6 @@ enable_lan_gateway_config "$DATA_DIR"
 
 # Switch gateway binding to lan now that the config has the required
 # origin settings.  This allows the mesh bridge to reach the gateway.
-COMPOSE_FILE_DIR="${HOME_DIR}/openclaw${N}"
-ENV_FILE="${COMPOSE_FILE_DIR}/.env"
 if [[ -f "$ENV_FILE" ]]; then
   sed -i 's/^OPENCLAW_GATEWAY_BIND=.*/OPENCLAW_GATEWAY_BIND=lan/' "$ENV_FILE"
 fi

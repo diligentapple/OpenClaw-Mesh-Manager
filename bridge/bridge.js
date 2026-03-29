@@ -3,6 +3,7 @@
 const http = require('http');
 const WebSocket = require('ws');
 const fs = require('fs');
+const path = require('path');
 const crypto = require('crypto');
 
 // Prevent unhandled promise rejections from crashing the bridge.
@@ -12,6 +13,7 @@ process.on('unhandledRejection', (err) => {
 });
 
 const CONFIG_PATH = process.env.BRIDGE_CONFIG || '/data/config.json';
+const BRIDGE_STATE_DIR = process.env.BRIDGE_STATE_DIR || '/data/state';
 const PORT = parseInt(process.env.BRIDGE_PORT || '3000', 10);
 const RESPONSE_TIMEOUT = parseInt(process.env.RESPONSE_TIMEOUT || '120000', 10);
 const ROSTER_DEBOUNCE_MS = parseInt(process.env.ROSTER_DEBOUNCE_MS || '15000', 10);
@@ -26,6 +28,16 @@ const CHAT_EVENT_GRACE_MS = parseInt(process.env.CHAT_EVENT_GRACE_MS || '1500', 
 const HISTORY_POLL_ATTEMPTS = parseInt(process.env.HISTORY_POLL_ATTEMPTS || '4', 10);
 const HISTORY_POLL_INTERVAL_MS = parseInt(process.env.HISTORY_POLL_INTERVAL_MS || '750', 10);
 const HISTORY_POLL_LIMIT = parseInt(process.env.HISTORY_POLL_LIMIT || '20', 10);
+const BRIDGE_CLIENT_ID = process.env.BRIDGE_CLIENT_ID || 'gateway-client';
+const BRIDGE_DEVICE_FAMILY = process.env.BRIDGE_DEVICE_FAMILY || 'server';
+const BRIDGE_SCOPES = [
+  'operator.admin',
+  'operator.read',
+  'operator.write',
+  'operator.approvals',
+  'operator.pairing',
+];
+const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 
 // ---------------------------------------------------------------------------
 // Config
@@ -33,6 +45,182 @@ const HISTORY_POLL_LIMIT = parseInt(process.env.HISTORY_POLL_LIMIT || '20', 10);
 function loadConfig() {
   return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
 }
+
+function ensureParentDir(filePath) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+}
+
+function readJsonFile(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function writeJsonFile(filePath, value) {
+  ensureParentDir(filePath);
+  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  try { fs.chmodSync(filePath, 0o600); } catch { /* ignore */ }
+}
+
+function base64UrlEncode(buffer) {
+  return buffer
+    .toString('base64')
+    .replaceAll('+', '-')
+    .replaceAll('/', '_')
+    .replace(/=+$/g, '');
+}
+
+function derivePublicKeyRaw(publicKeyPem) {
+  const spki = crypto.createPublicKey(publicKeyPem).export({
+    type: 'spki',
+    format: 'der',
+  });
+  if (
+    spki.length === ED25519_SPKI_PREFIX.length + 32 &&
+    spki.subarray(0, ED25519_SPKI_PREFIX.length).equals(ED25519_SPKI_PREFIX)
+  ) {
+    return spki.subarray(ED25519_SPKI_PREFIX.length);
+  }
+  return spki;
+}
+
+function fingerprintPublicKey(publicKeyPem) {
+  return crypto.createHash('sha256').update(derivePublicKeyRaw(publicKeyPem)).digest('hex');
+}
+
+function resolveBridgeIdentityPath() {
+  return path.join(BRIDGE_STATE_DIR, 'identity', 'device.json');
+}
+
+function resolveBridgeDeviceAuthPath() {
+  return path.join(BRIDGE_STATE_DIR, 'identity', 'device-auth.json');
+}
+
+function createBridgeDeviceIdentity() {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }).toString();
+  const privateKeyPem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+  return {
+    deviceId: fingerprintPublicKey(publicKeyPem),
+    publicKeyPem,
+    privateKeyPem,
+  };
+}
+
+function loadOrCreateBridgeDeviceIdentity() {
+  const filePath = resolveBridgeIdentityPath();
+  const parsed = readJsonFile(filePath);
+  if (
+    parsed &&
+    parsed.version === 1 &&
+    typeof parsed.deviceId === 'string' &&
+    typeof parsed.publicKeyPem === 'string' &&
+    typeof parsed.privateKeyPem === 'string'
+  ) {
+    const deviceId = fingerprintPublicKey(parsed.publicKeyPem);
+    if (deviceId !== parsed.deviceId) {
+      writeJsonFile(filePath, {
+        ...parsed,
+        deviceId,
+      });
+    }
+    return {
+      deviceId,
+      publicKeyPem: parsed.publicKeyPem,
+      privateKeyPem: parsed.privateKeyPem,
+    };
+  }
+
+  const identity = createBridgeDeviceIdentity();
+  writeJsonFile(filePath, {
+    version: 1,
+    ...identity,
+    createdAtMs: Date.now(),
+  });
+  return identity;
+}
+
+function publicKeyRawBase64UrlFromPem(publicKeyPem) {
+  return base64UrlEncode(derivePublicKeyRaw(publicKeyPem));
+}
+
+function signDevicePayload(privateKeyPem, payload) {
+  return base64UrlEncode(
+    crypto.sign(null, Buffer.from(payload, 'utf8'), crypto.createPrivateKey(privateKeyPem)),
+  );
+}
+
+function normalizeDeviceAuthMetadata(value) {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  return trimmed ? trimmed.toLowerCase() : '';
+}
+
+function buildDeviceAuthPayloadV3(params) {
+  const scopes = params.scopes.join(',');
+  const token = params.token || '';
+  const platform = normalizeDeviceAuthMetadata(params.platform);
+  const deviceFamily = normalizeDeviceAuthMetadata(params.deviceFamily);
+  return [
+    'v3',
+    params.deviceId,
+    params.clientId,
+    params.clientMode,
+    params.role,
+    scopes,
+    String(params.signedAtMs),
+    token,
+    params.nonce,
+    platform,
+    deviceFamily,
+  ].join('|');
+}
+
+function normalizeScopes(scopes) {
+  if (!Array.isArray(scopes)) return [];
+  return [...new Set(scopes.filter((scope) => typeof scope === 'string' && scope.trim()))].sort();
+}
+
+function loadBridgeDeviceAuthStore() {
+  const store = readJsonFile(resolveBridgeDeviceAuthPath());
+  if (!store || store.version !== 1 || typeof store.deviceId !== 'string') return null;
+  return store;
+}
+
+function loadStoredBridgeDeviceToken(instanceKey, role) {
+  const store = loadBridgeDeviceAuthStore();
+  if (!store || store.deviceId !== BRIDGE_DEVICE_IDENTITY.deviceId) return null;
+  const roleTokens = store.tokens?.[instanceKey];
+  const entry = roleTokens && roleTokens[role];
+  if (!entry || typeof entry.token !== 'string' || !entry.token.trim()) return null;
+  return entry;
+}
+
+function storeBridgeDeviceToken(instanceKey, role, token, scopes) {
+  if (!token || !token.trim()) return;
+  const existing = loadBridgeDeviceAuthStore();
+  const next = existing && existing.deviceId === BRIDGE_DEVICE_IDENTITY.deviceId
+    ? existing
+    : {
+        version: 1,
+        deviceId: BRIDGE_DEVICE_IDENTITY.deviceId,
+        tokens: {},
+      };
+  next.tokens = next.tokens || {};
+  next.tokens[instanceKey] = next.tokens[instanceKey] || {};
+  next.tokens[instanceKey][role] = {
+    token,
+    role,
+    scopes: normalizeScopes(scopes),
+    updatedAtMs: Date.now(),
+  };
+  writeJsonFile(resolveBridgeDeviceAuthPath(), next);
+}
+
+const BRIDGE_DEVICE_IDENTITY = loadOrCreateBridgeDeviceIdentity();
 
 // ---------------------------------------------------------------------------
 // Gateway WebSocket Client
@@ -44,6 +232,7 @@ class GatewayClient {
     this.port = port;
     this.url = `ws://${host}:${port}`;
     this.token = token;
+    this.deviceTokenStoreKey = `${instanceId}:${host}:${port}`;
     this.ws = null;
     this.connected = false;
     this.pending = new Map();          // reqId -> {resolve, reject, timer}
@@ -111,27 +300,73 @@ class GatewayClient {
 
         // --- challenge-response auth ---
         if (msg.type === 'event' && msg.event === 'connect.challenge') {
+          const role = 'operator';
+          const storedDeviceToken = loadStoredBridgeDeviceToken(
+            this.deviceTokenStoreKey,
+            role,
+          )?.token;
+          const signedAtMs = Date.now();
+          const signatureToken = this.token || storedDeviceToken || null;
+          const devicePayload = buildDeviceAuthPayloadV3({
+            deviceId: BRIDGE_DEVICE_IDENTITY.deviceId,
+            clientId: BRIDGE_CLIENT_ID,
+            clientMode: 'backend',
+            role,
+            scopes: BRIDGE_SCOPES,
+            signedAtMs,
+            token: signatureToken,
+            nonce: msg.payload?.nonce || '',
+            platform: 'linux',
+            deviceFamily: BRIDGE_DEVICE_FAMILY,
+          });
+          const auth = { token: this.token };
+          if (storedDeviceToken) {
+            auth.deviceToken = storedDeviceToken;
+          }
           this._send('connect', {
             minProtocol: 3,
             maxProtocol: 3,
             client: {
-              id: 'gateway-client',
+              id: BRIDGE_CLIENT_ID,
               displayName: 'OpenClaw Mesh Bridge',
               version: '1.0.0',
               platform: 'linux',
+              deviceFamily: BRIDGE_DEVICE_FAMILY,
               mode: 'backend',
             },
             locale: 'en-US',
-            role: 'operator',
-            scopes: [
-              'operator.admin',
-              'operator.read',
-              'operator.write',
-              'operator.approvals',
-              'operator.pairing',
-            ],
-            auth: { token: this.token },
-          }).then(() => {
+            role,
+            scopes: BRIDGE_SCOPES,
+            auth,
+            device: {
+              id: BRIDGE_DEVICE_IDENTITY.deviceId,
+              publicKey: publicKeyRawBase64UrlFromPem(BRIDGE_DEVICE_IDENTITY.publicKeyPem),
+              signature: signDevicePayload(BRIDGE_DEVICE_IDENTITY.privateKeyPem, devicePayload),
+              signedAt: signedAtMs,
+              nonce: msg.payload?.nonce || '',
+            },
+          }).then((hello) => {
+            if (hello?.auth?.deviceToken) {
+              storeBridgeDeviceToken(
+                this.deviceTokenStoreKey,
+                hello.auth.role || role,
+                hello.auth.deviceToken,
+                hello.auth.scopes || BRIDGE_SCOPES,
+              );
+            }
+            if (Array.isArray(hello?.auth?.scopes) && hello.auth.scopes.length > 0) {
+              console.log(
+                `[bridge] Instance ${this.instanceId}: granted scopes ` +
+                `${hello.auth.scopes.join(', ')}`
+              );
+              if (!hello.auth.scopes.includes('operator.write')) {
+                console.warn(
+                  `[bridge] Instance ${this.instanceId}: bridge is paired without ` +
+                  `operator.write. Approve the pending mesh-bridge pairing request ` +
+                  `to grant full relay access.`
+                );
+              }
+            }
             clearTimeout(timeout);
             this.connected = true;
             this._shouldReconnect = true;
